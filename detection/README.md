@@ -39,9 +39,9 @@ Hazards (`detection/hazards.py`), judged one frame at a time:
 
 | Key | Flagged when |
 | --- | --- |
-| `knife_edge` | a sharp tool is not on a cutting board and no one is holding it |
+| `knife_edge` | a sharp tool is set down with no one holding it or working at it (a knife in use is fine) |
 | `spill` | liquid, grease or food is on the floor or a work surface |
-| `unattended_burner` | a burner is on with no pan or pot on it |
+| `unattended_burner` | a burner is on with no one at the stove tending it (cooking is fine) |
 | `raw_meat_contact` | raw meat, poultry or fish touches cooked or ready-to-eat food |
 
 To tune what the model looks for, edit each hazard's `description`. How long a hazard must persist before it

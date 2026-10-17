@@ -156,5 +156,6 @@ def test_model_override_order(monkeypatch):
 
 def test_prompt_states_unattended_rules():
     prompt = build_system_prompt(["knife_edge", "unattended_burner"])
-    assert "NOT on a cutting board" in prompt and "no one is holding" in prompt
-    assert "no pan or pot on it" in prompt
+    assert "left unattended" in prompt and "while they are cutting" in prompt
+    assert "no worker standing at the stove" in prompt and "while someone is at the stove cooking" in prompt
+    assert "normal kitchen work" in prompt

@@ -25,11 +25,15 @@ HAZARDS: dict[str, Hazard] = {
         Hazard(
             key="knife_edge",
             label="Sharp tool",
-            # Unattended = not on a cutting board and nobody holding it.
+            # Unattended = set down with nobody using it. A knife in use is normal work.
             description=(
-                "a knife, cleaver, peeler, mandoline, or other sharp tool that is NOT on a cutting board and that "
-                "no one is holding (for example lying on a bare counter, the floor, a shelf, or in a sink). "
-                "A sharp tool on a cutting board, or in someone's hand, is not a hazard"
+                "a knife, cleaver, peeler, mandoline, or other sharp tool that has been left unattended: set down "
+                "with no one holding it and no one standing at it working (for example left on a counter, cutting "
+                "board, shelf, stove, floor, or in a sink while the cook has walked away). "
+                "NOT a hazard: a knife in someone's hand, including while they are cutting, chopping, slicing, or "
+                "carrying it; a knife a cook has just put down on their own cutting board while they keep working "
+                "right there; knives stored in a knife block, sheath, magnetic strip, or drawer. "
+                "Box only the sharp tool, not the person"
             ),
             color=(0, 165, 255),
             keywords=("knife", "blade", "cleaver", "sharp", "scissor", "peeler", "mandoline", "edge"),
@@ -44,10 +48,14 @@ HAZARDS: dict[str, Hazard] = {
         Hazard(
             key="unattended_burner",
             label="Unattended burner",
-            # Unattended = lit with no pan or pot on it.
+            # Unattended = on with no cook at the stove, with or without a pan on it.
             description=(
-                "a stove burner that is on (visible flame or a glowing red element) with no pan or pot on it. "
-                "A lit burner with a pan or pot on it, or a burner that is off, is not a hazard"
+                "a stove burner, grill, or griddle that is on (visible flame, glowing red element, steam, or "
+                "sizzling food) with no worker standing at the stove tending it. A pan or pot on an unattended lit "
+                "burner is still a hazard. "
+                "NOT a hazard: a burner that is on while someone is at the stove cooking (stirring, flipping, "
+                "plating, or standing in front of it watching the food); a burner that is off. "
+                "Box only the burner, not the person"
             ),
             color=(0, 0, 255),
             keywords=("burner", "flame", "fire", "stove", "heat"),
