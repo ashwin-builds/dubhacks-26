@@ -1,6 +1,6 @@
 # write_to_db.py
 import os
-from datetime import timedelta
+
 import psycopg
 from dotenv import load_dotenv
 
@@ -9,26 +9,37 @@ load_dotenv()
 conn = psycopg.connect(os.environ["TIGER_DATABASE_URL"], autocommit=True)
 
 
-def save_incident(hazard_type, time, duration, image, location, is_open):
-    """Save one hazard the camera reported. Returns its id so we can update it later."""
-    end_time = time + timedelta(seconds=duration)
+def get_zone_id(location):
+    """Turn a zone name like 'Fryer' into its zone_id. Returns None if unknown."""
+    row = conn.execute(
+        "SELECT zone_id FROM zones WHERE location = %s",
+        (location,),
+    ).fetchone()
+    return row[0] if row else None
 
+
+def save_incident(hazard_type, time, duration, image, location, description=None):
+    """Save one hazard the camera reported. Returns its id so we can update it later."""
     incident_id = conn.execute(
         """
-        INSERT INTO incidents (type, location, started_at, ended_at, duration_s, snapshot, is_open)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO incidents (time, hazard_type, duration, image_as_binary, perceptron_desc, zone_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING incident_id
         """,
-        (hazard_type, location, time, end_time, duration, image, is_open),
+        (time, hazard_type, duration, image, description, get_zone_id(location)),
     ).fetchone()[0]
 
     return incident_id
 
 
-def save_manager_reply(incident_id, said_yes):
-    """Record whether the manager confirmed (Y) or rejected (N) the alert."""
-    status = "confirmed" if said_yes else "rejected"
+def save_expo_reply(incident_id, said_yes, notes=None):
+    """Record the expo's verdict: Y = real hazard, N = false alarm."""
     conn.execute(
-        "UPDATE incidents SET status = %s WHERE incident_id = %s",
-        (status, incident_id),
+        """
+        UPDATE incidents
+        SET false_postitive = %s,
+            staff_notes     = coalesce(%s, staff_notes)
+        WHERE incident_id = %s
+        """,
+        (not said_yes, notes, incident_id),
     )

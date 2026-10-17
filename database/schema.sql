@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS incidents (
     duration        INTEGER,
     image_as_binary BYTEA,
     perceptron_desc TEXT,
-    false_postitive BOOLEAN DEFAULT FALSE,
+    false_postitive BOOLEAN DEFAULT NULL,
     zone_id         INT DEFAULT NULL,
-    staff_notes     TEXT DEFAULT NULL,  -- typed by manager, never camera
+    expo_notes     TEXT DEFAULT NULL,       -- typed by expo, never camera
     PRIMARY KEY (incident_id, time)     -- hypertables need the time column in the key
 );
 
