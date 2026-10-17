@@ -12,14 +12,16 @@ export PERCEPTRON_API_KEY=sk_live_...      # or put it in .env
 python -m detection.demo                   # default webcam, live window
 python -m detection.demo --camera 1        # another camera
 python -m detection.demo --image photo.jpg # one still image; annotated copy goes to detection/snapshots/
-python -m detection.demo --model isaac-0.1 --hazards spill knife_edge
+python -m detection.demo --list-models     # models your API key can use
+python -m detection.demo --model perceptron-mk1.5 --hazards spill knife_edge
 python -m detection.demo --show-prompt     # print the prompt sent to the model
 ```
 
 In the window: `q` quits, `s` saves an annotated snapshot. Every result is also printed to the terminal,
 including labels the model returned that matched no hazard.
 
-Model: `isaac-0.3-fast` by default; override with `--model` or `PERCEPTRON_MODEL`.
+Model: the fastest one your API key can use, picked at startup (Isaac models first, then `perceptron-mk1`, then
+`perceptron-mk1.5`). Run `--list-models` to see what your key has; override with `--model` or `PERCEPTRON_MODEL`.
 
 Hazards (`detection/hazards.py`), judged one frame at a time:
 

@@ -1,7 +1,8 @@
 """Send a frame to Perceptron and get back hazard boxes.
 
 Uses the ``perceptron`` SDK. Set ``PERCEPTRON_API_KEY`` in the environment (or ``.env``).
-The model is ``isaac-0.3-fast`` unless ``PERCEPTRON_MODEL`` or the ``model`` argument says otherwise.
+Model choice: the ``model`` argument, else ``PERCEPTRON_MODEL``, else the fastest model in
+the preference lists below that the API key can actually use (asked once via the Models API).
 
 This is per-frame classification only: each box gets a hazard label. Deciding when a hazard has lasted
 long enough to be an incident happens elsewhere, not here.
@@ -19,7 +20,10 @@ import numpy as np
 
 from detection.hazards import HAZARDS, match_hazard
 
-DEFAULT_MODEL = "isaac-0.3-fast"
+# Fastest first. Which of these exist depends on the account; the gateway is the source of truth.
+ISAAC_PREFERENCE = ("isaac-0.3-fast", "isaac-0.2-2b-preview", "isaac-0.2-1b", "isaac-0.1")
+MK_PREFERENCE = ("perceptron-mk1", "perceptron-mk1.5")
+FALLBACK_MODEL = "perceptron-mk1.5"  # the SDK default, used if the model list can't be fetched
 
 # Perceptron returns coordinates on a 0-1000 grid regardless of image size.
 GRID = 1000
@@ -75,10 +79,32 @@ def encode_frame(frame_bgr: np.ndarray, max_width: int = MAX_UPLOAD_WIDTH) -> by
     return buf.tobytes()
 
 
+def list_models() -> list[str]:
+    """Model ids this API key can use."""
+    from perceptron import Client
+
+    with Client() as client:
+        return [m.id for m in client.models.list()]
+
+
+def pick_model(available: list[str]) -> str:
+    """Known Isaac models, then any other Isaac model, then the Mk models, then whatever is available."""
+    for model in ISAAC_PREFERENCE:
+        if model in available:
+            return model
+    isaac = [m for m in available if m.startswith("isaac")]
+    if isaac:
+        return isaac[0]
+    for model in MK_PREFERENCE:
+        if model in available:
+            return model
+    return available[0] if available else FALLBACK_MODEL
+
+
 class IsaacClient:
     """Thin wrapper around ``perceptron.perceive`` for hazard detection.
 
-    ``perceive_fn`` is injectable so tests can run without the network.
+    ``perceive_fn`` and ``list_models_fn`` are injectable so tests can run without the network.
     """
 
     def __init__(
@@ -86,8 +112,9 @@ class IsaacClient:
         model: str | None = None,
         hazards: list[str] | None = None,
         perceive_fn: Callable[..., Any] | None = None,
+        list_models_fn: Callable[[], list[str]] | None = None,
     ):
-        self.model = model or os.environ.get("PERCEPTRON_MODEL") or DEFAULT_MODEL
+        self.model = model or os.environ.get("PERCEPTRON_MODEL") or self._auto_model(list_models_fn or list_models)
         self.hazards = hazards or list(HAZARDS)
         unknown = set(self.hazards) - set(HAZARDS)
         if unknown:
@@ -96,6 +123,14 @@ class IsaacClient:
             from perceptron import perceive as perceive_fn
         self._perceive = perceive_fn
         self.system_prompt = build_system_prompt(self.hazards)
+
+    @staticmethod
+    def _auto_model(list_models_fn: Callable[[], list[str]]) -> str:
+        try:
+            available = list_models_fn()
+        except Exception:  # model listing is a convenience; detection should still start
+            available = []
+        return pick_model(available)
 
     def detect(self, frame_bgr: np.ndarray) -> FrameResult:
         from perceptron import image, system, text

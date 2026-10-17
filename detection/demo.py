@@ -6,6 +6,7 @@ No database or alerts; this is for trying the model out on your own camera.
     python -m detection.demo --camera 1         # another camera
     python -m detection.demo --image kitchen.jpg
     python -m detection.demo --hazards spill knife_edge --model perceptron-mk1.5
+    python -m detection.demo --list-models      # which models your API key can use
 
 Keys in the live window: q / Esc to quit, s to save an annotated snapshot.
 """
@@ -24,7 +25,7 @@ import cv2
 import numpy as np
 
 from detection.hazards import HAZARDS
-from detection.isaac_client import DEFAULT_MODEL, FrameResult, IsaacClient
+from detection.isaac_client import FrameResult, IsaacClient, list_models
 from detection.overlay import draw_detections, draw_status
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
@@ -182,7 +183,10 @@ def main(argv: list[str] | None = None) -> int:
         default=float(os.environ.get("ISAAC_QUERIES_PER_SEC", 2)),
         help="max Perceptron requests per second (default ISAAC_QUERIES_PER_SEC or 2)",
     )
-    parser.add_argument("--model", help=f"Perceptron model id (default: PERCEPTRON_MODEL or {DEFAULT_MODEL})")
+    parser.add_argument(
+        "--model", help="Perceptron model id (default: PERCEPTRON_MODEL, else the fastest model your key can use)"
+    )
+    parser.add_argument("--list-models", action="store_true", help="print the models your API key can use and exit")
     parser.add_argument(
         "--hazards", nargs="+", choices=list(HAZARDS), default=list(HAZARDS), help="hazards to look for (default all)"
     )
@@ -193,6 +197,10 @@ def main(argv: list[str] | None = None) -> int:
     if not (os.environ.get("PERCEPTRON_API_KEY") or os.environ.get("FAL_KEY")):
         print("Set PERCEPTRON_API_KEY in your environment or .env first.", file=sys.stderr)
         return 2
+    if args.list_models:
+        for model_id in list_models():
+            print(model_id)
+        return 0
     client = IsaacClient(model=args.model, hazards=args.hazards)
     print(f"Model: {client.model}")
     if args.show_prompt:

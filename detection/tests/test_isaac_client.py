@@ -5,13 +5,19 @@ import pytest
 
 from detection.hazards import match_hazard
 from detection.isaac_client import (
-    DEFAULT_MODEL,
+    FALLBACK_MODEL,
     Detection,
     IsaacClient,
     build_system_prompt,
     encode_frame,
+    pick_model,
 )
 from detection.overlay import draw_detections, draw_status
+
+
+@pytest.fixture(autouse=True)
+def _no_model_listing(monkeypatch):
+    monkeypatch.setattr("detection.isaac_client.list_models", lambda: ["isaac-0.1"])
 
 
 def _box(mention, x1, y1, x2, y2):
@@ -109,19 +115,43 @@ def test_overlay_draws_without_mutating_input():
     assert out.sum() > 0
 
 
-def test_model_defaults_to_fast_isaac(monkeypatch):
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [
+        (["perceptron-mk1.5", "isaac-0.2-2b-preview", "isaac-0.1"], "isaac-0.2-2b-preview"),
+        (["perceptron-mk1.5", "perceptron-mk1"], "perceptron-mk1"),
+        (["perceptron-mk1.5", "isaac-0.4-turbo"], "isaac-0.4-turbo"),
+        (["some-new-model"], "some-new-model"),
+        ([], FALLBACK_MODEL),
+    ],
+)
+def test_pick_model(available, expected):
+    assert pick_model(available) == expected
+
+
+def test_model_auto_picks_from_available(monkeypatch):
     monkeypatch.delenv("PERCEPTRON_MODEL", raising=False)
     calls = []
-    client = IsaacClient(perceive_fn=_fake_perceive([], calls))
+    client = IsaacClient(perceive_fn=_fake_perceive([], calls), list_models_fn=lambda: ["perceptron-mk1.5", "isaac-0.1"])
     client.detect(np.zeros((10, 10, 3), dtype=np.uint8))
-    assert client.model == DEFAULT_MODEL == "isaac-0.3-fast"
-    assert calls[0][1]["model"] == "isaac-0.3-fast"
+    assert client.model == "isaac-0.1"
+    assert calls[0][1]["model"] == "isaac-0.1"
+
+
+def test_model_falls_back_when_listing_fails(monkeypatch):
+    monkeypatch.delenv("PERCEPTRON_MODEL", raising=False)
+
+    def broken():
+        raise RuntimeError("no network")
+
+    assert IsaacClient(perceive_fn=_fake_perceive([]), list_models_fn=broken).model == FALLBACK_MODEL
 
 
 def test_model_override_order(monkeypatch):
     monkeypatch.setenv("PERCEPTRON_MODEL", "perceptron-mk1.5")
-    assert IsaacClient(perceive_fn=_fake_perceive([])).model == "perceptron-mk1.5"
-    assert IsaacClient(model="isaac-0.1", perceive_fn=_fake_perceive([])).model == "isaac-0.1"
+    never = lambda: pytest.fail("should not list models when a model is given")  # noqa: E731
+    assert IsaacClient(perceive_fn=_fake_perceive([]), list_models_fn=never).model == "perceptron-mk1.5"
+    assert IsaacClient(model="isaac-0.1", perceive_fn=_fake_perceive([]), list_models_fn=never).model == "isaac-0.1"
 
 
 def test_prompt_states_unattended_rules():
