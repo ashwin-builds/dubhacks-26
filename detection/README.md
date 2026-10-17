@@ -17,6 +17,23 @@ python -m detection.demo --model perceptron-mk1.5 --hazards spill knife_edge
 python -m detection.demo --show-prompt     # print the prompt sent to the model
 ```
 
+## Testing on video (played back as a live feed)
+
+```bash
+python -m detection.demo --video clip.mp4             # a file on disk
+python -m detection.demo --video                      # pick the file in a dialog
+python -m detection.demo --video "https://www.youtube.com/watch?v=..."   # downloaded once to detection/videos/
+python -m detection.demo --video clip.mp4 --speed 2   # twice real time
+python -m detection.demo --video clip.mp4 --loop      # repeat until you press q
+```
+
+The video plays at real-time speed through the exact same loop as the webcam: frames the program can't keep up
+with are dropped rather than played late, and the model is called at most `--fps` times a second. So the model
+sees what it would see if the scene were happening in front of the camera. Each result is stamped with its video
+time (`[01:12.5] HAZARD: Spill`), and when the video ends a summary lists how many analysed frames showed each
+hazard and when it was first and last seen. Direct links to `.mp4`/`.mov`/`.webm` files stream without
+downloading; page URLs (YouTube, Vimeo, ...) need `yt-dlp`, which is in `requirements.txt`.
+
 In the window: `q` quits, `s` saves an annotated snapshot. Every result is also printed to the terminal,
 including labels the model returned that matched no hazard.
 
@@ -45,7 +62,8 @@ smooth while a request is in flight; boxes update when the next answer arrives.
 | `hazards.py` | the four hazards: prompt text, overlay colour, label matching |
 | `isaac_client.py` | builds the prompt, sends a frame, turns boxes into `Detection`s |
 | `overlay.py` | draws boxes and the status banner |
-| `demo.py` | webcam / image CLI |
+| `video_source.py` | plays a video file or URL as a real-time "camera" |
+| `demo.py` | webcam / video / image CLI |
 
 ## Tests
 
