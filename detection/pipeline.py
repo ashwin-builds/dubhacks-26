@@ -105,6 +105,12 @@ def print_event(event: IncidentEvent, pipeline: IncidentPipeline) -> None:
             f"(id {report.client_incident_id})",
             flush=True,
         )
+    elif event.kind == "rejected":
+        print(
+            f"*** INCIDENT REJECTED by manager (false positive): {report.hazard_type}, first seen {start}; "
+            f"no longer recording (id {report.client_incident_id})",
+            flush=True,
+        )
     else:
         print(
             f"*** INCIDENT CLOSED: {report.hazard_type}, first seen {start}, lasted {report.duration_seconds:.1f}s, "

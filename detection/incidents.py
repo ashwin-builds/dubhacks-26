@@ -7,9 +7,9 @@ incident only when the danger has been present for a sustained stretch.
 
 Rule (per danger type, per camera):
 
-* Keep the last ``window_frames`` classifications (60 frames = 30 s at 2 fps).
+* Keep the last ``window_frames`` classifications (40 frames = 20 s at 2 fps).
 * Open an incident once the window is full and at least ``min_ratio`` of it
-  (80% -> 48 of 60 frames) shows the danger.
+  (80% -> 32 of 40 frames) shows the danger.
 * The incident's start is the earliest danger frame still in the window, and
   that frame's image is attached to the report.
 * Close the incident once the danger has been absent for ``clear_after_frames``
@@ -17,7 +17,7 @@ Rule (per danger type, per camera):
   the last one.
 * If the manager rejects the incident (false positive), stop tracking it and
   send nothing more. The same danger cannot reopen until it has cleared, so a
-  persistent false positive does not text the manager again 24 s later.
+  persistent false positive does not text the manager again 16 s later.
 
 Missing frames are found from gaps in the frame timestamps. They count as "no
 danger seen" toward opening (an incident needs real evidence), but they neither
@@ -55,9 +55,9 @@ class Danger(str, Enum):
 
 FPS = 2.0
 
-# TODO(zach): placeholder -- every danger uses the same 30 s window for now.
+# TODO(zach): placeholder -- every danger uses the same 20 s window for now.
 # Per-danger durations will come from the hazard_policy table later.
-DANGER_SECONDS: dict[Danger, float] = {danger: 30.0 for danger in Danger}
+DANGER_SECONDS: dict[Danger, float] = {danger: 20.0 for danger in Danger}
 
 MIN_RATIO = 0.8
 
@@ -95,7 +95,7 @@ class IncidentReport:
 
 @dataclass(frozen=True)
 class IncidentEvent:
-    kind: Literal["opened", "closed"]
+    kind: Literal["opened", "closed", "rejected"]
     report: IncidentReport
 
 
@@ -273,17 +273,18 @@ class IncidentDetector:
         # Rounding absorbs jitter: a frame up to 0.75 intervals late is not a drop.
         return max(0, round((timestamp - last).total_seconds() / self.frame_seconds) - 1)
 
-    def reject(self, client_incident_id: str) -> bool:
+    def reject(self, client_incident_id: str) -> IncidentEvent | None:
         """Stop recording an open incident the manager marked as a false positive.
 
-        Nothing further is reported for it. Returns False if no open incident
+        Nothing further is reported for it. Returns None if no open incident
         has that ID (for example it already closed before the reply arrived).
         """
         for tracker in self._trackers.values():
-            if tracker.open_report is not None and tracker.open_report.client_incident_id == client_incident_id:
+            report = tracker.open_report
+            if report is not None and report.client_incident_id == client_incident_id:
                 tracker.reject()
-                return True
-        return False
+                return IncidentEvent("rejected", report)
+        return None
 
     def run(self, results: Iterable[ClassifiedFrame]) -> list[IncidentEvent]:
         """Process a whole sequence of frames, flushing at the end."""

@@ -33,7 +33,7 @@ def test_sustained_danger_opens_once_window_is_full():
     hits = feed(IncidentDetector(), frames("1" * 70))
     assert len(hits) == 1
     index, event = hits[0]
-    assert index == 59  # 60th frame = 30 s
+    assert index == 39  # 40th frame = 20 s
     assert event.kind == "opened"
     report = event.report
     assert report.danger is Danger.SPILLS
@@ -41,14 +41,14 @@ def test_sustained_danger_opens_once_window_is_full():
     assert report.camera_id == "camera_1"
     assert report.started_at == T0
     assert report.first_frame == "img0"
-    assert report.duration_seconds == 30.0
+    assert report.duration_seconds == 20.0
 
 
 def test_exactly_80_percent_opens_but_79_does_not():
-    # 48 of 60 frames: opens.
-    assert feed(IncidentDetector(), frames("0" * 12 + "1" * 48))
-    # 47 of 60: never opens, even with gaps spread out.
-    assert not feed(IncidentDetector(), frames("0" * 13 + "1" * 47))
+    # 32 of 40 frames: opens.
+    assert feed(IncidentDetector(), frames("0" * 8 + "1" * 32))
+    # 31 of 40: never opens.
+    assert not feed(IncidentDetector(), frames("0" * 9 + "1" * 31))
 
 
 def test_intermittent_detection_still_counts():
@@ -60,7 +60,7 @@ def test_intermittent_detection_still_counts():
 
 def test_short_exposure_never_opens():
     detector = IncidentDetector()
-    assert detector.run(frames("0" * 10 + "1" * 40 + "0" * 60)) == []
+    assert detector.run(frames("0" * 10 + "1" * 31 + "0" * 60)) == []
 
 
 def test_start_is_first_danger_frame_in_window():
@@ -68,7 +68,7 @@ def test_start_is_first_danger_frame_in_window():
     results = frames("0" * 20 + "1" * 60)
     hits = feed(IncidentDetector(), results)
     report = hits[0][1].report
-    assert hits[0][0] == 20 + 47  # 48th danger frame
+    assert hits[0][0] == 20 + 31  # 32nd danger frame
     assert report.started_at == results[20].timestamp
     assert report.first_frame == "img20"
 
@@ -144,8 +144,8 @@ def test_missing_frames_are_counted_and_reported():
 
 
 def test_missing_frames_count_against_opening():
-    # 50 danger frames seen, but 15 of the 60-frame window dropped -> only 45 positive.
-    results = drop(frames("1" * 60), range(10, 25))
+    # 9 of the 40-frame window dropped -> only 31 positive.
+    results = drop(frames("1" * 40), range(10, 19))
     assert IncidentDetector().run(results) == []
 
 

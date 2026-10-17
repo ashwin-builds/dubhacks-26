@@ -49,14 +49,16 @@ becomes an incident is decided by the incident layer below, not by the model.
 
 ## Incidents
 
-One frame showing a hazard is not an incident. `incidents.py` keeps the last 60 analysed frames (30 s at 2 fps)
-per hazard and opens an incident once 80% of them (48) show it. The incident closes after the hazard has been gone
+One frame showing a hazard is not an incident. `incidents.py` keeps the last 40 analysed frames (20 s at 2 fps)
+per hazard and opens an incident once 80% of them show it. The incident closes after the hazard has been gone
 for 10 s. Timing comes from video time, so model latency doesn't affect durations.
 
 - **Opened**: the worker sends the incident ID it generated, the start time (first hazard frame), the location,
   the camera, the hazard type, and that first frame with boxes drawn, compressed to a ≤640 px JPEG.
-- **Rejected**: if the manager says it was a false positive, `IncidentReporter.reject(id)` stops recording it and
-  nothing more is sent. The same hazard can't reopen until it has cleared.
+- **Checked**: every 10 s, while anything is open, the worker sends `POST /incidents/false-positives` with
+  `{"incident_ids": [...]}` (open incidents the API has acknowledged). The API answers `{"<id>": true, ...}` for the
+  ones the manager marked as false positives; those stop being recorded and are never closed. Anything other than
+  `true` keeps the incident going. The same hazard can't reopen until it has cleared.
 - **Closed**: the worker sends the same ID with the duration.
 
 Frames the model never answered (call failed, or all request slots busy) are counted as missing from gaps in the
@@ -66,7 +68,7 @@ there were. The terminal prints `*** INCIDENT OPENED` / `CLOSED` lines and the b
 Without `--api-url` (or `API_URL`), incidents are printed but not sent. The worker token is read from
 `API_WORKER_TOKEN`.
 
-TODO: the 30 s window is hardcoded for every hazard (`DANGER_SECONDS` in `incidents.py`), and `camera_1`'s zone is
+TODO: the 20 s window is hardcoded for every hazard (`DANGER_SECONDS` in `incidents.py`), and `camera_1`'s zone is
 a placeholder (`CAMERA_LOCATIONS` in `api_client.py`).
 
 ## Files
