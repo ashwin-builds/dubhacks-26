@@ -1,7 +1,8 @@
 """Hazard demo: play a kitchen video as if it were a live camera and run Perceptron on it at 2 fps.
 
 Nothing is analysed ahead of time. The video plays in real time; every 0.5 s of playback the frame on
-screen is sent to the model, exactly as a live 2 fps camera feed would be. No database or alerts.
+screen is sent to the model, exactly as a live 2 fps camera feed would be. Results feed the incident
+detector; incidents are printed, and sent to the API only if --api-url (or API_URL) is set.
 
     python -m detection.demo clip.mp4            # a video file
     python -m detection.demo                     # choose the file in a dialog
@@ -9,6 +10,7 @@ screen is sent to the model, exactly as a live 2 fps camera feed would be. No da
     python -m detection.demo clip.mp4 --loop     # keep streaming until you press q
     python -m detection.demo clip.mp4 --hazards spill knife_edge --model perceptron-mk1.5
     python -m detection.demo --list-models       # which models your API key can use
+    python -m detection.demo clip.mp4 --api-url http://localhost:8000   # also send incidents to the API
 
 Keys in the window: q / Esc to quit, s to save an annotated snapshot.
 """
@@ -22,13 +24,17 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
 
+from detection.api_client import HttpIncidentApi, IncidentReporter, StubIncidentApi
 from detection.hazards import HAZARDS
+from detection.incidents import Danger, IncidentDetector
 from detection.isaac_client import FrameResult, IsaacClient, list_models
 from detection.overlay import draw_detections, draw_status
+from detection.pipeline import IncidentPipeline
 from detection.video_source import VideoFileStream, format_position, pick_video_file, resolve_video
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
@@ -52,12 +58,17 @@ def describe(result: FrameResult) -> str:
     return f"HAZARD: {', '.join(names)}  ({result.latency_s:.1f}s)"
 
 
-def annotate(frame: np.ndarray, result: FrameResult | None, error: str | None = None) -> np.ndarray:
+def annotate(
+    frame: np.ndarray, result: FrameResult | None, error: str | None = None, incidents: list[Danger] = ()
+) -> np.ndarray:
     if error:
         return draw_status(frame, f"Error: {error}", alert=True)
     if result is None:
         return draw_status(frame, "Waiting for first result...", alert=False)
-    out = draw_status(frame, describe(result), alert=bool(result.detections))
+    message = describe(result)
+    if incidents:
+        message += "  |  INCIDENT: " + ", ".join(HAZARDS[d.value].label for d in incidents)
+    out = draw_status(frame, message, alert=bool(result.detections or incidents))
     return draw_detections(out, result.detections)
 
 
@@ -103,8 +114,15 @@ class Analyzer:
     running when the next sample is due, that sample is skipped, as a live system would do.
     """
 
-    def __init__(self, client: IsaacClient, max_in_flight: int = MAX_IN_FLIGHT):
+    def __init__(
+        self,
+        client: IsaacClient,
+        max_in_flight: int = MAX_IN_FLIGHT,
+        on_result: Callable[[int, float, np.ndarray, FrameResult | None], None] | None = None,
+    ):
         self.client = client
+        # Called with (sequence number, video time, frame, result or None on failure) for every sent frame.
+        self.on_result = on_result
         self._pool = ThreadPoolExecutor(max_workers=max_in_flight)
         self._slots = threading.BoundedSemaphore(max_in_flight)
         self._lock = threading.Lock()
@@ -121,11 +139,13 @@ class Analyzer:
         if not self._slots.acquire(blocking=False):
             self.skipped += 1
             return False
+        seq = self.sent
         self.sent += 1
-        self._pool.submit(self._analyze, frame, position_s)
+        self._pool.submit(self._analyze, frame, position_s, seq)
         return True
 
-    def _analyze(self, frame: np.ndarray, position_s: float) -> None:
+    def _analyze(self, frame: np.ndarray, position_s: float, seq: int | None = None) -> None:
+        result = None
         try:
             result = self.client.detect(frame)
         except Exception as exc:  # keep the stream running through network hiccups
@@ -141,6 +161,8 @@ class Analyzer:
                 log_result(result, position_s)
         finally:
             self._slots.release()
+            if self.on_result is not None and seq is not None:
+                self.on_result(seq, position_s, frame, result)
 
     def close(self, wait: bool = True) -> None:
         self._pool.shutdown(wait=wait, cancel_futures=not wait)
@@ -152,9 +174,13 @@ def run_video(
     fps: float,
     show: bool,
     analyzer: Analyzer | None = None,
+    pipeline: IncidentPipeline | None = None,
 ) -> int:
-    """Play ``stream`` in real time, sending the current frame to the model every ``1 / fps`` seconds of video."""
-    analyzer = analyzer or Analyzer(client)
+    """Play ``stream`` in real time, sending the current frame to the model every ``1 / fps`` seconds of video.
+
+    If ``pipeline`` is given, every model result is fed to it so sustained hazards become incidents.
+    """
+    analyzer = analyzer or Analyzer(client, on_result=pipeline.deliver if pipeline else None)
     interval = 1.0 / fps
     next_sample = 0.0
     finished = True
@@ -173,7 +199,7 @@ def run_video(
                 next_sample += interval * (int((position - next_sample) / interval) + 1)
             if not show:
                 continue
-            view = annotate(frame, analyzer.result, analyzer.error)
+            view = annotate(frame, analyzer.result, analyzer.error, pipeline.open_dangers() if pipeline else [])
             cv2.imshow("Kitchen hazards", view)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
@@ -191,6 +217,8 @@ def run_video(
             cv2.destroyAllWindows()
         # At the natural end, let requests still in flight finish so they count in the summary.
         analyzer.close(wait=finished)
+        if pipeline is not None:
+            pipeline.close()  # closes any incident still open when the video ended
         print(f"Sent {analyzer.sent} frames to the model, skipped {analyzer.skipped} (all request slots busy).")
         print(summarize(analyzer.history))
 
@@ -214,6 +242,11 @@ def main(argv: list[str] | None = None) -> int:
         "--hazards", nargs="+", choices=list(HAZARDS), default=list(HAZARDS), help="hazards to look for (default all)"
     )
     parser.add_argument("--no-window", action="store_true", help="print results only; no video window")
+    parser.add_argument(
+        "--api-url",
+        default=os.environ.get("API_URL"),
+        help="send incidents to this API (default API_URL; if unset, incidents are only printed)",
+    )
     parser.add_argument("--show-prompt", action="store_true", help="print the prompt sent to the model")
     args = parser.parse_args(argv)
 
@@ -246,7 +279,14 @@ def main(argv: list[str] | None = None) -> int:
         f"Streaming {video} ({length}{stream.fps:g} fps) in real time, "
         f"sending {args.fps:g} frames/sec to the model. Press q to stop, s to save a snapshot."
     )
-    return run_video(client, stream, args.fps, show=not args.no_window)
+    if args.api_url:
+        api = HttpIncidentApi(args.api_url, os.environ.get("API_WORKER_TOKEN", ""))
+        print(f"Sending incidents to {args.api_url}")
+    else:
+        api = StubIncidentApi()
+        print("No --api-url: incidents are printed, not sent.")
+    pipeline = IncidentPipeline(IncidentReporter(IncidentDetector(fps=args.fps), api), fps=args.fps)
+    return run_video(client, stream, args.fps, show=not args.no_window, pipeline=pipeline)
 
 
 if __name__ == "__main__":

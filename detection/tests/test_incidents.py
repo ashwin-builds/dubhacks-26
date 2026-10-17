@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from detection.incidents import Danger, FrameResult, IncidentDetector
+from detection.incidents import Danger, ClassifiedFrame, IncidentDetector
 
 T0 = datetime(2026, 10, 17, 18, 0, tzinfo=timezone.utc)
 
@@ -11,7 +11,7 @@ def frames(pattern, danger=Danger.SPILLS, start=0):
     for i, ch in enumerate(pattern, start=start):
         present = ch == "1"
         out.append(
-            FrameResult(
+            ClassifiedFrame(
                 timestamp=T0 + timedelta(seconds=i * 0.5),
                 dangers=frozenset({danger}) if present else frozenset(),
                 frame=f"img{i}" if present else None,
@@ -112,7 +112,7 @@ def test_dangers_are_tracked_independently():
         if i >= 30:
             dangers.add(Danger.BURNERS)
         events += detector.update(
-            FrameResult(T0 + timedelta(seconds=i * 0.5), frozenset(dangers), f"img{i}")
+            ClassifiedFrame(T0 + timedelta(seconds=i * 0.5), frozenset(dangers), f"img{i}")
         )
     assert [(e.kind, e.report.danger) for e in events] == [("opened", Danger.SHARPS)]
 
@@ -154,7 +154,7 @@ def test_jitter_is_not_counted_as_missing():
     t = T0
     for i in range(20):
         t += timedelta(seconds=0.4 if i % 2 else 0.6)
-        detector.update(FrameResult(t, frozenset()))
+        detector.update(ClassifiedFrame(t, frozenset()))
     assert detector.missing_frames == 0
 
 

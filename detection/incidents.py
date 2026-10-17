@@ -42,23 +42,16 @@ log = logging.getLogger(__name__)
 
 
 class Danger(str, Enum):
-    SHARPS = "sharps"
-    BURNERS = "burners"
-    SPILLS = "spills"
-    CONTAMINATION = "contamination"
+    """The four dangers; values are the hazard keys in ``detection.hazards`` and the shared contract."""
+
+    SHARPS = "knife_edge"
+    BURNERS = "unattended_burner"
+    SPILLS = "spill"
+    CONTAMINATION = "raw_meat_contact"
 
     @property
     def hazard_type(self) -> str:
-        """The shared-contract ``hazard_type`` name the API expects."""
-        return _HAZARD_TYPES[self]
-
-
-_HAZARD_TYPES = {
-    Danger.SHARPS: "knife_edge",
-    Danger.BURNERS: "unattended_burner",
-    Danger.SPILLS: "spill",
-    Danger.CONTAMINATION: "raw_meat_contact",
-}
+        return self.value
 
 FPS = 2.0
 
@@ -76,8 +69,8 @@ DEFAULT_CAMERA_ID = "camera_1"
 
 
 @dataclass(frozen=True)
-class FrameResult:
-    """One classified frame, as produced by the danger classifier."""
+class ClassifiedFrame:
+    """One analysed frame: which dangers the model saw in it."""
 
     timestamp: datetime
     dangers: frozenset[Danger]
@@ -146,7 +139,7 @@ class _DangerTracker:
                 self.open_report, missing_frames=self.open_report.missing_frames + count
             )
 
-    def update(self, result: FrameResult, camera_id: str) -> IncidentEvent | None:
+    def update(self, result: ClassifiedFrame, camera_id: str) -> IncidentEvent | None:
         present = self.danger in result.dangers
         # Only danger frames keep their image; the rest would just hold memory.
         self._push(_Sample(present, timestamp=result.timestamp, frame=result.frame if present else None))
@@ -166,7 +159,7 @@ class _DangerTracker:
             return None
         return self.close()
 
-    def _maybe_open(self, result: FrameResult, camera_id: str) -> IncidentEvent | None:
+    def _maybe_open(self, result: ClassifiedFrame, camera_id: str) -> IncidentEvent | None:
         if len(self.window) < self.window_frames or self.positives < self.min_positive:
             return None
         samples = list(self.window)
@@ -258,7 +251,7 @@ class IncidentDetector:
                 frame_seconds=self.frame_seconds,
             )
 
-    def update(self, result: FrameResult) -> list[IncidentEvent]:
+    def update(self, result: ClassifiedFrame) -> list[IncidentEvent]:
         missing = self._count_missing(result.timestamp)
         if missing:
             self.missing_frames += missing
@@ -292,7 +285,7 @@ class IncidentDetector:
                 return True
         return False
 
-    def run(self, results: Iterable[FrameResult]) -> list[IncidentEvent]:
+    def run(self, results: Iterable[ClassifiedFrame]) -> list[IncidentEvent]:
         """Process a whole sequence of frames, flushing at the end."""
         events = []
         for result in results:

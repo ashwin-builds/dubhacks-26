@@ -1,8 +1,8 @@
 # detection/
 
-Kitchen video (played as a live stream) → Perceptron at 2 fps → hazard boxes. Owner: Zach.
+Kitchen video (played as a live stream) → Perceptron at 2 fps → hazard boxes → incidents → API. Owner: Zach.
 
-## Demo (no database, no alerts)
+## Demo
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -16,6 +16,7 @@ python -m detection.demo clip.mp4 --loop                # keep streaming until y
 python -m detection.demo clip.mp4 --hazards spill knife_edge
 python -m detection.demo --list-models                  # models your API key can use
 python -m detection.demo clip.mp4 --show-prompt         # print the prompt sent to the model
+python -m detection.demo clip.mp4 --api-url http://localhost:8000   # also send incidents to the API
 ```
 
 Nothing is analysed ahead of time. The video plays in real time, and every 0.5 s of playback the frame on
@@ -44,7 +45,29 @@ Hazards (`detection/hazards.py`), judged one frame at a time:
 | `raw_meat_contact` | raw meat, poultry or fish touches cooked or ready-to-eat food |
 
 To tune what the model looks for, edit each hazard's `description`. How long a hazard must persist before it
-becomes an incident is decided by the separate incident layer (not built yet), not by the model.
+becomes an incident is decided by the incident layer below, not by the model.
+
+## Incidents
+
+One frame showing a hazard is not an incident. `incidents.py` keeps the last 60 analysed frames (30 s at 2 fps)
+per hazard and opens an incident once 80% of them (48) show it. The incident closes after the hazard has been gone
+for 10 s. Timing comes from video time, so model latency doesn't affect durations.
+
+- **Opened**: the worker sends the incident ID it generated, the start time (first hazard frame), the location,
+  the camera, the hazard type, and that first frame with boxes drawn, compressed to a ≤640 px JPEG.
+- **Rejected**: if the manager says it was a false positive, `IncidentReporter.reject(id)` stops recording it and
+  nothing more is sent. The same hazard can't reopen until it has cleared.
+- **Closed**: the worker sends the same ID with the duration.
+
+Frames the model never answered (call failed, or all request slots busy) are counted as missing from gaps in the
+timestamps. They count as "no hazard" toward opening, don't count toward closing, and each report says how many
+there were. The terminal prints `*** INCIDENT OPENED` / `CLOSED` lines and the banner shows open incidents.
+
+Without `--api-url` (or `API_URL`), incidents are printed but not sent. The worker token is read from
+`API_WORKER_TOKEN`.
+
+TODO: the 30 s window is hardcoded for every hazard (`DANGER_SECONDS` in `incidents.py`), and `camera_1`'s zone is
+a placeholder (`CAMERA_LOCATIONS` in `api_client.py`).
 
 ## Files
 
@@ -55,6 +78,10 @@ becomes an incident is decided by the separate incident layer (not built yet), n
 | `overlay.py` | draws boxes and the status banner |
 | `video_source.py` | plays a video file or URL in real time, dropping frames like a live camera |
 | `demo.py` | the CLI: streams a video, samples 2 fps, runs the model, shows boxes, prints a summary |
+| `incidents.py` | sliding-window incident detector: open, close, reject, missing frames |
+| `pipeline.py` | puts out-of-order model answers back in video order and feeds them to the detector |
+| `api_client.py` | sends opened/closed incidents to the API, retrying failed calls in order |
+| `compression.py` | shrinks a frame to a small JPEG |
 
 ## Tests
 

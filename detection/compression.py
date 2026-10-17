@@ -2,31 +2,27 @@
 
 from __future__ import annotations
 
-import io
-from typing import Any
-
-from PIL import Image
+import cv2
+import numpy as np
 
 MAX_SIDE = 640
 JPEG_QUALITY = 70
 
 
-def compress_frame(frame: Any, max_side: int = MAX_SIDE, quality: int = JPEG_QUALITY, bgr: bool = False) -> bytes:
+def compress_frame(frame: np.ndarray | bytes, max_side: int = MAX_SIDE, quality: int = JPEG_QUALITY) -> bytes:
     """Return ``frame`` as JPEG bytes, longest side at most ``max_side`` pixels.
 
-    Accepts encoded image bytes, a PIL image, or an HxWx3 uint8 array. Arrays are
-    assumed RGB; pass ``bgr=True`` for frames straight from OpenCV.
+    Accepts a BGR frame as OpenCV produces it, or already-encoded image bytes.
     """
     if isinstance(frame, (bytes, bytearray)):
-        image = Image.open(io.BytesIO(frame))
-    elif isinstance(frame, Image.Image):
-        image = frame
-    else:
-        array = frame[..., ::-1] if bgr else frame
-        image = Image.fromarray(array)
-
-    image = image.convert("RGB")
-    image.thumbnail((max_side, max_side))  # keeps aspect ratio, never upscales
-    out = io.BytesIO()
-    image.save(out, format="JPEG", quality=quality, optimize=True)
-    return out.getvalue()
+        frame = cv2.imdecode(np.frombuffer(frame, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError("could not decode image bytes")
+    height, width = frame.shape[:2]
+    scale = max_side / max(height, width)
+    if scale < 1:  # never upscale
+        frame = cv2.resize(frame, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise ValueError("could not JPEG-encode frame")
+    return buf.tobytes()

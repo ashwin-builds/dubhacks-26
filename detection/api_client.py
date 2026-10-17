@@ -23,7 +23,7 @@ from typing import Callable, Protocol
 import requests
 
 from detection.compression import compress_frame
-from detection.incidents import FrameResult, IncidentDetector, IncidentEvent, IncidentReport
+from detection.incidents import ClassifiedFrame, IncidentDetector, IncidentEvent, IncidentReport
 
 log = logging.getLogger(__name__)
 
@@ -99,15 +99,15 @@ class IncidentReporter:
         self.compress = compress
         self._pending: deque[Callable[[], None]] = deque()
 
-    def process(self, result: FrameResult) -> None:
+    def process(self, result: ClassifiedFrame) -> list[IncidentEvent]:
         """Feed one classified frame through the detector and report what changed."""
-        self.handle(self.detector.update(result))
+        return self.handle(self.detector.update(result))
 
-    def finish(self) -> None:
+    def finish(self) -> list[IncidentEvent]:
         """End of stream: close anything still open."""
-        self.handle(self.detector.flush())
+        return self.handle(self.detector.flush())
 
-    def handle(self, events: list[IncidentEvent]) -> None:
+    def handle(self, events: list[IncidentEvent]) -> list[IncidentEvent]:
         for event in events:
             report = event.report
             if event.kind == "opened":
@@ -116,6 +116,7 @@ class IncidentReporter:
             else:
                 self._pending.append(lambda r=report: self.api.close_incident(r))
         self._drain()
+        return events
 
     def reject(self, client_incident_id: str) -> bool:
         """The API relayed a manager's "no": stop recording this incident."""
