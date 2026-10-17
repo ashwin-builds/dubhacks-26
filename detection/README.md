@@ -31,10 +31,7 @@ Hazards (`detection/hazards.py`), judged one frame at a time:
 | `raw_meat_contact` | raw meat, poultry or fish touches cooked or ready-to-eat food |
 
 To tune what the model looks for, edit each hazard's `description`. How long a hazard must persist before it
-becomes an incident is the job of the incident layer (`incidents.py`, not built yet), not the prompt.
-
-Each box carries a confidence the model reports itself (shown as a percentage). Perceptron's API returns no
-logprobs or detection scores, so this is a rough signal, not a calibrated probability.
+becomes an incident is decided by the separate incident layer (not built yet), not by the model.
 
 Requests go out at most `--fps` times a second (default `ISAAC_QUERIES_PER_SEC`, else 2). The video stays
 smooth while a request is in flight; boxes update when the next answer arrives.

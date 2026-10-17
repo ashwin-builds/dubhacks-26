@@ -59,8 +59,7 @@ def log_result(result: FrameResult) -> None:
     stamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{stamp}] {describe(result)}", flush=True)
     for det in result.detections:
-        conf = "  n/a" if det.confidence is None else f"{det.confidence:5.0%}"
-        print(f"    {det.hazard:<18} {conf}  {det.mention!r:<30} box={det.box}", flush=True)
+        print(f"    {det.hazard:<18} {det.mention!r:<30} box={det.box}", flush=True)
     if result.unmatched:
         print(f"    (ignored labels: {result.unmatched})", flush=True)
 

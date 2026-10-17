@@ -3,14 +3,13 @@
 Uses the ``perceptron`` SDK. Set ``PERCEPTRON_API_KEY`` in the environment (or ``.env``).
 The model is ``isaac-0.3-fast`` unless ``PERCEPTRON_MODEL`` or the ``model`` argument says otherwise.
 
-Confidence is self-reported: the model is asked to append a 0-1 score to each label. Perceptron's API
-exposes no logprobs or detection scores, so treat it as a rough signal, not a calibrated probability.
+This is per-frame classification only: each box gets a hazard label. Deciding when a hazard has lasted
+long enough to be an incident happens elsewhere, not here.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -33,7 +32,6 @@ class Detection:
     hazard: str  # key in detection.hazards.HAZARDS
     mention: str  # the label exactly as the model wrote it
     box: tuple[int, int, int, int]  # x1, y1, x2, y2 on the 0-1000 grid
-    confidence: float | None = None  # model's own 0-1 estimate; None if it gave none
 
     def pixel_box(self, width: int, height: int) -> tuple[int, int, int, int]:
         x1, y1, x2, y2 = self.box
@@ -59,28 +57,11 @@ def build_system_prompt(hazards: list[str]) -> str:
         "You are a safety monitor watching a restaurant kitchen camera. "
         "Find every instance of these hazards in the image:\n"
         f"{lines}\n"
-        "Draw one box around each hazard. Label it with exactly one of these keys, a space, and your "
-        "confidence from 0 to 1 that it really is that hazard, for example \"spill 0.8\". "
-        f"Keys: {', '.join(hazards)}. "
+        "Draw one box around each hazard and label it with exactly one of these keys: "
+        f"{', '.join(hazards)}. "
         "Only box real hazards. If there are no hazards, box nothing."
     )
 
-
-# A trailing score on a label: "spill 0.8", "spill: 0.85", "spill (80%)".
-_SCORE = re.compile(r"[\s:=(\[]*(\d*\.?\d+)\s*(%?)[)\]]?\s*$")
-
-
-def split_confidence(mention: str) -> tuple[str, float | None]:
-    """Split a label like ``"spill 0.8"`` into ``("spill", 0.8)``; the score is None if absent or out of range."""
-    match = _SCORE.search(mention)
-    if not match or match.start() == 0:
-        return mention, None
-    value = float(match.group(1))
-    if match.group(2) or value > 1:
-        value /= 100
-    if not 0 <= value <= 1:
-        return mention, None
-    return mention[: match.start()].strip(), value
 
 
 def encode_frame(frame_bgr: np.ndarray, max_width: int = MAX_UPLOAD_WIDTH) -> bytes:
@@ -139,8 +120,7 @@ class IsaacClient:
         unmatched: list[str] = []
         for box in result.boxes or []:
             mention = (box.mention or "").strip()
-            label, confidence = split_confidence(mention)
-            key = match_hazard(label)
+            key = match_hazard(mention)
             if key is None or key not in self.hazards:
                 unmatched.append(mention)
                 continue
@@ -151,7 +131,6 @@ class IsaacClient:
                     hazard=key,
                     mention=mention,
                     box=(min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)),
-                    confidence=confidence,
                 )
             )
         return FrameResult(detections=detections, unmatched=unmatched, latency_s=latency, raw_text=result.text)

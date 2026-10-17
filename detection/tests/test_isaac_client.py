@@ -10,7 +10,6 @@ from detection.isaac_client import (
     IsaacClient,
     build_system_prompt,
     encode_frame,
-    split_confidence,
 )
 from detection.overlay import draw_detections, draw_status
 
@@ -110,29 +109,6 @@ def test_overlay_draws_without_mutating_input():
     assert out.sum() > 0
 
 
-@pytest.mark.parametrize(
-    ("mention", "expected"),
-    [
-        ("spill 0.8", ("spill", 0.8)),
-        ("knife_edge: 0.65", ("knife_edge", 0.65)),
-        ("unattended_burner (90%)", ("unattended_burner", 0.9)),
-        ("raw_meat_contact 85", ("raw_meat_contact", 0.85)),
-        ("spill 1", ("spill", 1.0)),
-        ("spill", ("spill", None)),
-        ("spill 250", ("spill 250", None)),
-        ("0.9", ("0.9", None)),
-    ],
-)
-def test_split_confidence(mention, expected):
-    assert split_confidence(mention) == expected
-
-
-def test_detect_reads_confidence_from_label():
-    boxes = [_box("spill 0.72", 0, 0, 10, 10), _box("knife_edge", 0, 0, 10, 10)]
-    result = IsaacClient(perceive_fn=_fake_perceive(boxes)).detect(np.zeros((10, 10, 3), dtype=np.uint8))
-    assert [(d.hazard, d.confidence) for d in result.detections] == [("spill", 0.72), ("knife_edge", None)]
-
-
 def test_model_defaults_to_fast_isaac(monkeypatch):
     monkeypatch.delenv("PERCEPTRON_MODEL", raising=False)
     calls = []
@@ -152,10 +128,3 @@ def test_prompt_states_unattended_rules():
     prompt = build_system_prompt(["knife_edge", "unattended_burner"])
     assert "NOT on a cutting board" in prompt and "no one is holding" in prompt
     assert "no pan or pot on it" in prompt
-
-
-def test_overlay_draws_confidence():
-    frame = np.zeros((200, 200, 3), dtype=np.uint8)
-    without = draw_detections(frame, [Detection("spill", "spill", (100, 100, 900, 900))])
-    with_conf = draw_detections(frame, [Detection("spill", "spill 0.8", (100, 100, 900, 900), confidence=0.8)])
-    assert not np.array_equal(without, with_conf)
