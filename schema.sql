@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS incidents (
     wrote_at        TIMESTAMPTZ NOT NULL,
     start_time      TIMESTAMPTZ NOT NULL,
     stop_time       TIMESTAMPTZ,                       -- NULL while hazard is still open
-    classified_at   TIMESTAMPTZ,
+    
     zone_id         INT NOT NULL REFERENCES zones(zone_id),
     peak_confidence REAL,
     snapshot_url    TEXT,
