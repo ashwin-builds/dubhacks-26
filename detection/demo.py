@@ -5,7 +5,7 @@ No database or alerts; this is for trying the model out on your own camera.
     python -m detection.demo                    # default webcam, live window
     python -m detection.demo --camera 1         # another camera
     python -m detection.demo --image kitchen.jpg
-    python -m detection.demo --hazards spill knife_edge --model isaac-0.1
+    python -m detection.demo --hazards spill knife_edge --model perceptron-mk1.5
 
 Keys in the live window: q / Esc to quit, s to save an annotated snapshot.
 """
@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 
 from detection.hazards import HAZARDS
-from detection.isaac_client import FrameResult, IsaacClient
+from detection.isaac_client import DEFAULT_MODEL, FrameResult, IsaacClient
 from detection.overlay import draw_detections, draw_status
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
@@ -59,7 +59,8 @@ def log_result(result: FrameResult) -> None:
     stamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{stamp}] {describe(result)}", flush=True)
     for det in result.detections:
-        print(f"    {det.hazard:<18} {det.mention!r:<30} box={det.box}", flush=True)
+        conf = "  n/a" if det.confidence is None else f"{det.confidence:5.0%}"
+        print(f"    {det.hazard:<18} {conf}  {det.mention!r:<30} box={det.box}", flush=True)
     if result.unmatched:
         print(f"    (ignored labels: {result.unmatched})", flush=True)
 
@@ -182,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         default=float(os.environ.get("ISAAC_QUERIES_PER_SEC", 2)),
         help="max Perceptron requests per second (default ISAAC_QUERIES_PER_SEC or 2)",
     )
-    parser.add_argument("--model", help="Perceptron model id (default: PERCEPTRON_MODEL or the SDK default)")
+    parser.add_argument("--model", help=f"Perceptron model id (default: PERCEPTRON_MODEL or {DEFAULT_MODEL})")
     parser.add_argument(
         "--hazards", nargs="+", choices=list(HAZARDS), default=list(HAZARDS), help="hazards to look for (default all)"
     )
@@ -194,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Set PERCEPTRON_API_KEY in your environment or .env first.", file=sys.stderr)
         return 2
     client = IsaacClient(model=args.model, hazards=args.hazards)
+    print(f"Model: {client.model}")
     if args.show_prompt:
         print(client.system_prompt, end="\n\n")
 

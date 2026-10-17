@@ -19,7 +19,7 @@ def draw_detections(frame: np.ndarray, detections: list[Detection]) -> np.ndarra
         hazard = HAZARDS[det.hazard]
         x1, y1, x2, y2 = det.pixel_box(width, height)
         cv2.rectangle(out, (x1, y1), (x2, y2), hazard.color, 3)
-        label = hazard.label
+        label = hazard.label if det.confidence is None else f"{hazard.label} {det.confidence:.0%}"
         (tw, th), baseline = cv2.getTextSize(label, FONT, 0.6, 2)
         ty = max(y1, th + baseline + 4)
         cv2.rectangle(out, (x1, ty - th - baseline - 4), (x1 + tw + 8, ty), hazard.color, -1)

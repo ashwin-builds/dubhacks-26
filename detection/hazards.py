@@ -25,9 +25,11 @@ HAZARDS: dict[str, Hazard] = {
         Hazard(
             key="knife_edge",
             label="Sharp tool",
+            # Unattended = not on a cutting board and nobody holding it.
             description=(
-                "a knife, cleaver, peeler, mandoline, or other sharp tool left unattended: lying with the blade "
-                "exposed, hanging over a counter edge, left in a sink or on a cutting board with no one using it"
+                "a knife, cleaver, peeler, mandoline, or other sharp tool that is NOT on a cutting board and that "
+                "no one is holding (for example lying on a bare counter, the floor, a shelf, or in a sink). "
+                "A sharp tool on a cutting board, or in someone's hand, is not a hazard"
             ),
             color=(0, 165, 255),
             keywords=("knife", "blade", "cleaver", "sharp", "scissor", "peeler", "mandoline", "edge"),
@@ -42,11 +44,13 @@ HAZARDS: dict[str, Hazard] = {
         Hazard(
             key="unattended_burner",
             label="Unattended burner",
+            # Unattended = lit with no pan or pot on it.
             description=(
-                "a lit burner, open flame, fire, or smoking pan on a stove with no person attending it"
+                "a stove burner that is on (visible flame or a glowing red element) with no pan or pot on it. "
+                "A lit burner with a pan or pot on it, or a burner that is off, is not a hazard"
             ),
             color=(0, 0, 255),
-            keywords=("burner", "flame", "fire", "stove", "smok", "pan", "pot", "heat"),
+            keywords=("burner", "flame", "fire", "stove", "heat"),
         ),
         Hazard(
             key="raw_meat_contact",

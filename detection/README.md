@@ -19,8 +19,22 @@ python -m detection.demo --show-prompt     # print the prompt sent to the model
 In the window: `q` quits, `s` saves an annotated snapshot. Every result is also printed to the terminal,
 including labels the model returned that matched no hazard.
 
-Hazards (`detection/hazards.py`): `knife_edge` (sharp tools left out), `spill`, `unattended_burner`,
-`raw_meat_contact`. To tune what the model looks for, edit each hazard's `description`.
+Model: `isaac-0.3-fast` by default; override with `--model` or `PERCEPTRON_MODEL`.
+
+Hazards (`detection/hazards.py`), judged one frame at a time:
+
+| Key | Flagged when |
+| --- | --- |
+| `knife_edge` | a sharp tool is not on a cutting board and no one is holding it |
+| `spill` | liquid, grease or food is on the floor or a work surface |
+| `unattended_burner` | a burner is on with no pan or pot on it |
+| `raw_meat_contact` | raw meat, poultry or fish touches cooked or ready-to-eat food |
+
+To tune what the model looks for, edit each hazard's `description`. How long a hazard must persist before it
+becomes an incident is the job of the incident layer (`incidents.py`, not built yet), not the prompt.
+
+Each box carries a confidence the model reports itself (shown as a percentage). Perceptron's API returns no
+logprobs or detection scores, so this is a rough signal, not a calibrated probability.
 
 Requests go out at most `--fps` times a second (default `ISAAC_QUERIES_PER_SEC`, else 2). The video stays
 smooth while a request is in flight; boxes update when the next answer arrives.
