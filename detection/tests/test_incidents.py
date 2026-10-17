@@ -124,3 +124,71 @@ def test_hazard_type_mapping():
         Danger.SPILLS: "spill",
         Danger.CONTAMINATION: "raw_meat_contact",
     }
+
+
+def drop(results, indices):
+    return [r for i, r in enumerate(results) if i not in set(indices)]
+
+
+def test_missing_frames_are_counted_and_reported():
+    detector = IncidentDetector()
+    # 70 danger frames with 5 dropped in the middle: 65 seen, 5 missing.
+    results = drop(frames("1" * 70), range(30, 35))
+    events = detector.run(results)
+    assert detector.missing_frames == 5
+    assert [e.kind for e in events] == ["opened", "closed"]
+    assert events[0].report.missing_frames == 5
+    assert events[1].report.missing_frames == 5
+    # Duration still spans the real time, gaps included.
+    assert events[1].report.duration_seconds == 35.0
+
+
+def test_missing_frames_count_against_opening():
+    # 50 danger frames seen, but 15 of the 60-frame window dropped -> only 45 positive.
+    results = drop(frames("1" * 60), range(10, 25))
+    assert IncidentDetector().run(results) == []
+
+
+def test_jitter_is_not_counted_as_missing():
+    detector = IncidentDetector()
+    t = T0
+    for i in range(20):
+        t += timedelta(seconds=0.4 if i % 2 else 0.6)
+        detector.update(FrameResult(t, frozenset()))
+    assert detector.missing_frames == 0
+
+
+def test_missing_frames_do_not_close_an_open_incident():
+    # Opens, then the feed drops for 15 s (30 frames), then danger is still there.
+    results = drop(frames("1" * 120), range(60, 90))
+    events = feed(IncidentDetector(), results)
+    assert [e.kind for _, e in events] == ["opened"]
+
+
+def test_reject_stops_recording_and_sends_no_close():
+    detector = IncidentDetector()
+    results = frames("1" * 200 + "0" * 30)
+    events = feed(detector, results[:60])
+    incident_id = events[0][1].report.client_incident_id
+    assert detector.reject(incident_id)
+    assert detector.open_incidents() == []
+    # Danger still visible for 70 s more: no reopen, no close, nothing.
+    assert feed(detector, results[60:]) == []
+    assert detector.flush() == []
+
+
+def test_rejected_danger_can_open_again_after_it_clears():
+    detector = IncidentDetector()
+    events = feed(detector, frames("1" * 60))
+    detector.reject(events[0][1].report.client_incident_id)
+    # Clears (20 absent frames), then a genuinely new 30 s exposure.
+    later = feed(detector, frames("0" * 20 + "1" * 60, start=60))
+    assert [e.kind for _, e in later] == ["opened"]
+    assert later[0][1].report.client_incident_id != events[0][1].report.client_incident_id
+
+
+def test_reject_unknown_or_closed_incident_returns_false():
+    detector = IncidentDetector()
+    events = detector.run(frames("1" * 70))
+    assert not detector.reject(events[0].report.client_incident_id)
+    assert not detector.reject("nope")

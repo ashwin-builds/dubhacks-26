@@ -15,6 +15,14 @@ Rule (per danger type, per camera):
 * Close the incident once the danger has been absent for ``clear_after_frames``
   consecutive frames. Duration runs from the first danger frame to the end of
   the last one.
+* If the manager rejects the incident (false positive), stop tracking it and
+  send nothing more. The same danger cannot reopen until it has cleared, so a
+  persistent false positive does not text the manager again 24 s later.
+
+Missing frames are found from gaps in the frame timestamps. They count as "no
+danger seen" toward opening (an incident needs real evidence), but they neither
+advance nor reset the clear countdown of an open incident (a dropped frame is
+not proof the hazard is gone). Each report carries how many frames were missing.
 
 Durations are computed from the frames' own timestamps, never wall-clock time,
 so a prerecorded video gives the same answer however fast it is played.
@@ -22,12 +30,15 @@ so a prerecorded video gives the same answer however fast it is played.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Iterable, Literal
+
+log = logging.getLogger(__name__)
 
 
 class Danger(str, Enum):
@@ -75,12 +86,13 @@ class FrameResult:
 
 @dataclass(frozen=True)
 class IncidentReport:
-    client_incident_id: str
+    client_incident_id: str  # generated here; the API stores it for lookup
     danger: Danger
     camera_id: str
     started_at: datetime  # timestamp of the first danger frame
     duration_seconds: float  # so far while open; final once closed
     first_frame: Any
+    missing_frames: int = 0  # frames dropped between the first danger frame and now
     ended_at: datetime | None = None  # set on close
 
     @property
@@ -96,8 +108,9 @@ class IncidentEvent:
 
 @dataclass
 class _Sample:
-    timestamp: datetime
     present: bool
+    missing: bool = False
+    timestamp: datetime | None = None
     frame: Any = None
 
 
@@ -110,6 +123,7 @@ class _DangerTracker:
     frame_seconds: float
     window: deque[_Sample] = field(init=False)
     positives: int = 0
+    state: Literal["idle", "open", "rejected"] = "idle"
     open_report: IncidentReport | None = None
     last_seen: datetime | None = None
     misses: int = 0
@@ -117,61 +131,94 @@ class _DangerTracker:
     def __post_init__(self) -> None:
         self.window = deque(maxlen=self.window_frames)
 
-    def update(self, result: FrameResult, camera_id: str) -> IncidentEvent | None:
-        present = self.danger in result.dangers
+    def _push(self, sample: _Sample) -> None:
         if len(self.window) == self.window_frames and self.window[0].present:
             self.positives -= 1
-        # Only danger frames keep their image; the rest would just hold memory.
-        self.window.append(_Sample(result.timestamp, present, result.frame if present else None))
-        self.positives += present
+        self.window.append(sample)
+        self.positives += sample.present
 
+    def add_missing(self, count: int) -> None:
+        # Past one full window, more missing samples change nothing.
+        for _ in range(min(count, self.window_frames)):
+            self._push(_Sample(present=False, missing=True))
         if self.open_report is not None:
-            return self._update_open(result, present)
-
-        if len(self.window) == self.window_frames and self.positives >= self.min_positive:
-            first = next(s for s in self.window if s.present)
-            self.last_seen = result.timestamp
-            self.misses = 0
-            self.open_report = IncidentReport(
-                client_incident_id=str(uuid.uuid4()),
-                danger=self.danger,
-                camera_id=camera_id,
-                started_at=first.timestamp,
-                duration_seconds=self._duration(first.timestamp, result.timestamp),
-                first_frame=first.frame,
+            self.open_report = replace(
+                self.open_report, missing_frames=self.open_report.missing_frames + count
             )
-            return IncidentEvent("opened", self.open_report)
-        return None
 
-    def _update_open(self, result: FrameResult, present: bool) -> IncidentEvent | None:
+    def update(self, result: FrameResult, camera_id: str) -> IncidentEvent | None:
+        present = self.danger in result.dangers
+        # Only danger frames keep their image; the rest would just hold memory.
+        self._push(_Sample(present, timestamp=result.timestamp, frame=result.frame if present else None))
+
+        if self.state == "idle":
+            return self._maybe_open(result, camera_id)
+
         if present:
             self.last_seen = result.timestamp
             self.misses = 0
             return None
         self.misses += 1
-        if self.misses >= self.clear_after_frames:
-            return self.close()
-        return None
+        if self.misses < self.clear_after_frames:
+            return None
+        if self.state == "rejected":
+            self._reset()
+            return None
+        return self.close()
+
+    def _maybe_open(self, result: FrameResult, camera_id: str) -> IncidentEvent | None:
+        if len(self.window) < self.window_frames or self.positives < self.min_positive:
+            return None
+        samples = list(self.window)
+        start = next(i for i, s in enumerate(samples) if s.present)
+        first = samples[start]
+        self.state = "open"
+        self.last_seen = result.timestamp
+        self.misses = 0
+        self.open_report = IncidentReport(
+            client_incident_id=str(uuid.uuid4()),
+            danger=self.danger,
+            camera_id=camera_id,
+            started_at=first.timestamp,
+            duration_seconds=self._duration(first.timestamp, result.timestamp),
+            first_frame=first.frame,
+            missing_frames=sum(s.missing for s in samples[start:]),
+        )
+        return IncidentEvent("opened", self.open_report)
+
+    def reject(self) -> None:
+        """Manager said it was a false positive: drop it, wait for it to clear."""
+        self.state = "rejected"
+        self.open_report = None
+        self.misses = 0
 
     def close(self) -> IncidentEvent | None:
-        if self.open_report is None:
+        report = self.open_report
+        self._reset()
+        if report is None:
             return None
         assert self.last_seen is not None
-        report = replace(
-            self.open_report,
-            ended_at=self.last_seen + timedelta(seconds=self.frame_seconds),
-            duration_seconds=self._duration(self.open_report.started_at, self.last_seen),
+        event = IncidentEvent(
+            "closed",
+            replace(
+                report,
+                ended_at=self.last_seen + timedelta(seconds=self.frame_seconds),
+                duration_seconds=self._duration(report.started_at, self.last_seen),
+            ),
         )
-        self.open_report = None
         self.last_seen = None
+        return event
+
+    def _reset(self) -> None:
+        self.state = "idle"
+        self.open_report = None
         self.misses = 0
-        # Forget the evidence that opened this incident, so a new one needs a
+        # Forget the evidence behind the last incident, so a new one needs a
         # fresh 80% of the window rather than reopening off stale frames.
         for sample in self.window:
             sample.present = False
             sample.frame = None
         self.positives = 0
-        return IncidentEvent("closed", report)
 
     def _duration(self, first: datetime, last: datetime) -> float:
         # Each frame stands for 1/fps seconds, so a single frame lasts 0.5 s, not 0.
@@ -182,8 +229,9 @@ class IncidentDetector:
     """Tracks every danger type for one camera.
 
     Feed it frames in order with :meth:`update`; it returns the incidents that
-    opened or closed on that frame. Call :meth:`flush` when the stream ends so
-    any still-open incident is closed.
+    opened or closed on that frame. Call :meth:`reject` when the manager says an
+    incident was a false positive, and :meth:`flush` when the stream ends so any
+    still-open incident is closed.
     """
 
     def __init__(
@@ -195,6 +243,9 @@ class IncidentDetector:
         clear_after_seconds: float = CLEAR_AFTER_SECONDS,
     ) -> None:
         self.camera_id = camera_id
+        self.frame_seconds = 1.0 / fps
+        self.missing_frames = 0  # total over the whole stream
+        self._last_timestamp: datetime | None = None
         seconds = danger_seconds or DANGER_SECONDS
         self._trackers: dict[Danger, _DangerTracker] = {}
         for danger in Danger:
@@ -204,16 +255,42 @@ class IncidentDetector:
                 window_frames=window_frames,
                 min_positive=round(window_frames * min_ratio),
                 clear_after_frames=max(1, round(clear_after_seconds * fps)),
-                frame_seconds=1.0 / fps,
+                frame_seconds=self.frame_seconds,
             )
 
     def update(self, result: FrameResult) -> list[IncidentEvent]:
+        missing = self._count_missing(result.timestamp)
+        if missing:
+            self.missing_frames += missing
+            log.warning("%s: %d frame(s) missing before %s", self.camera_id, missing, result.timestamp)
+            for tracker in self._trackers.values():
+                tracker.add_missing(missing)
+
         events = []
         for tracker in self._trackers.values():
             event = tracker.update(result, self.camera_id)
             if event is not None:
                 events.append(event)
         return events
+
+    def _count_missing(self, timestamp: datetime) -> int:
+        last, self._last_timestamp = self._last_timestamp, timestamp
+        if last is None:
+            return 0
+        # Rounding absorbs jitter: a frame up to 0.75 intervals late is not a drop.
+        return max(0, round((timestamp - last).total_seconds() / self.frame_seconds) - 1)
+
+    def reject(self, client_incident_id: str) -> bool:
+        """Stop recording an open incident the manager marked as a false positive.
+
+        Nothing further is reported for it. Returns False if no open incident
+        has that ID (for example it already closed before the reply arrived).
+        """
+        for tracker in self._trackers.values():
+            if tracker.open_report is not None and tracker.open_report.client_incident_id == client_incident_id:
+                tracker.reject()
+                return True
+        return False
 
     def run(self, results: Iterable[FrameResult]) -> list[IncidentEvent]:
         """Process a whole sequence of frames, flushing at the end."""
