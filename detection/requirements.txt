@@ -1,0 +1,6 @@
+# detection/ dependencies. Install with: pip install -r detection/requirements.txt
+perceptron>=0.4.0,<0.5
+opencv-python>=4.8
+numpy>=1.24
+python-dotenv>=1.0
+pytest>=8.0
