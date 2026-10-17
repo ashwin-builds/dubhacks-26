@@ -27,20 +27,16 @@ class VideoFileStream:
     def __init__(
         self,
         source: str,
-        speed: float = 1.0,
         loop: bool = False,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ):
-        if speed <= 0:
-            raise ValueError("speed must be positive")
         self._cap = cv2.VideoCapture(source)
         if not self._cap.isOpened():
             raise OSError(f"could not open video: {source}")
         self.fps = self._cap.get(cv2.CAP_PROP_FPS) or 30.0
         frames = self._cap.get(cv2.CAP_PROP_FRAME_COUNT)
         self.duration_s = frames / self.fps if frames > 0 else None
-        self.speed = speed
         self.loop = loop
         self._clock = clock
         self._sleep = sleep
@@ -57,7 +53,7 @@ class VideoFileStream:
             self._start = self._clock()
 
         # Skip frames whose time has already passed, like a camera that kept rolling.
-        due_index = int((self._clock() - self._start) * self.speed * self.fps)
+        due_index = int((self._clock() - self._start) * self.fps)
         while self._next_index < due_index:
             if not self._cap.grab():
                 return self._at_end()
@@ -65,7 +61,7 @@ class VideoFileStream:
             self.dropped += 1
 
         # Ahead of schedule: wait until this frame is due.
-        wait = self._start + self._next_index / (self.fps * self.speed) - self._clock()
+        wait = self._start + self._next_index / self.fps - self._clock()
         if wait > 0:
             self._sleep(wait)
 

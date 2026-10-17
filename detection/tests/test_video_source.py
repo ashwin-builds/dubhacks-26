@@ -67,14 +67,6 @@ def test_drops_frames_when_reader_falls_behind(clip):
     assert stream.position_s == pytest.approx(0.7)
 
 
-def test_speed_scales_playback(clip):
-    clock = FakeClock()
-    stream = VideoFileStream(clip, speed=2.0, clock=clock, sleep=clock.sleep)
-    while stream.read()[0]:
-        pass
-    assert clock.now - 100.0 == pytest.approx(FRAMES / FPS / 2)
-
-
 def test_loop_restarts(clip):
     clock = FakeClock()
     stream = VideoFileStream(clip, loop=True, clock=clock, sleep=clock.sleep)
@@ -85,8 +77,6 @@ def test_loop_restarts(clip):
 def test_bad_inputs(tmp_path, clip):
     with pytest.raises(OSError):
         VideoFileStream(str(tmp_path / "missing.mp4"))
-    with pytest.raises(ValueError):
-        VideoFileStream(clip, speed=0)
     with pytest.raises(FileNotFoundError):
         resolve_video(str(tmp_path / "missing.mp4"))
 
@@ -111,7 +101,7 @@ def _result(*hazards):
 
 
 def test_summarize():
-    history = [(0.5, _result()), (1.0, _result("spill")), (1.5, _result("spill", "knife_edge")), (2.0, _result())]
+    history = [(1.5, _result("spill", "knife_edge")), (0.5, _result()), (1.0, _result("spill")), (2.0, _result())]
     text = demo.summarize(history)
     assert "Analysed 4 frames." in text
     assert "Spill" in text and "2 / 4" in text and "first 00:01.0" in text and "last 00:01.5" in text
@@ -119,19 +109,90 @@ def test_summarize():
     assert "No hazards detected." in demo.summarize([(0.0, _result())])
 
 
-def test_run_video_end_to_end(clip, capsys, monkeypatch):
-    """Play the clip headless through the real loop with a fake model that sees a spill after 1 s."""
-    seen_positions = []
+class FakeClient:
+    """Sees a spill once the clip is past 1 s; records which frames it was sent."""
 
-    class FakeClient:
-        def detect(self, frame):
-            hazard = ("spill",) if _frame_index(frame) >= 10 else ()
-            seen_positions.append(_frame_index(frame))
-            return _result(*hazard)
+    def __init__(self, delay_s=0.0):
+        self.delay_s = delay_s
+        self.frames = []
 
-    code = demo.run_video(FakeClient(), clip, fps=20, show=False, speed=4.0, loop=False)
+    def detect(self, frame):
+        import time
+
+        time.sleep(self.delay_s)
+        index = _frame_index(frame)
+        self.frames.append(index)
+        return _result("spill") if index >= 10 else _result()
+
+
+def _stream(clip, clock=None, **kwargs):
+    clock = clock or FakeClock()
+    return VideoFileStream(clip, clock=clock, sleep=clock.sleep, **kwargs)
+
+
+def test_samples_at_2fps_of_video_time(clip, capsys):
+    """A 2 s clip at 10 fps, streamed live, sends exactly frames 0, 5, 10, 15 (every 0.5 s)."""
+    client = FakeClient()
+    code = demo.run_video(client, _stream(clip), fps=2, show=False)
     out = capsys.readouterr().out
     assert code == 0
+    assert sorted(client.frames) == [0, 5, 10, 15]
     assert "Video finished." in out
-    assert "Analysed" in out and "Spill" in out
-    assert seen_positions  # the analyzer received frames
+    assert "Sent 4 frames to the model, skipped 0" in out
+    assert "Spill" in out and "2 / 4 frames" in out and "first 00:01.0" in out
+
+
+def test_slow_model_keeps_schedule_by_overlapping_requests(clip, capsys):
+    """A model slower than the sample interval still gets every sample; requests run in parallel."""
+    client = FakeClient(delay_s=0.2)
+    clock = FakeClock()
+    demo.run_video(client, _stream(clip, clock), fps=2, show=False, analyzer=demo.Analyzer(client, max_in_flight=4))
+    assert sorted(client.frames) == [0, 5, 10, 15]
+
+
+def test_busy_slots_skip_samples():
+    import threading
+
+    gate = threading.Event()
+
+    class Blocking:
+        def detect(self, frame):
+            gate.wait(5)
+            return _result()
+
+    analyzer = demo.Analyzer(Blocking(), max_in_flight=1)
+    frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    assert analyzer.submit(frame, 0.0) is True
+    assert analyzer.submit(frame, 0.5) is False  # the one slot is busy, as in a live system
+    gate.set()
+    analyzer.close()
+    assert (analyzer.sent, analyzer.skipped, len(analyzer.history)) == (1, 1, 1)
+
+
+def test_out_of_order_answers_keep_newest_on_screen():
+    """If the answer for an older frame arrives after a newer one, the screen keeps the newer result."""
+    analyzer = demo.Analyzer(FakeClient(), max_in_flight=2)
+    newer, older = np.full((4, 4, 3), 150, np.uint8), np.full((4, 4, 3), 0, np.uint8)
+    for frame, position in ((newer, 1.5), (older, 0.5)):  # answers land newest-first
+        analyzer._slots.acquire()
+        analyzer._analyze(frame, position)
+    analyzer.close()
+    assert analyzer.result_position == 1.5
+    assert [d.hazard for d in analyzer.result.detections] == ["spill"]
+    assert len(analyzer.history) == 2
+
+
+def test_cli_requires_api_key(monkeypatch, clip):
+    monkeypatch.delenv("PERCEPTRON_API_KEY", raising=False)
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.setattr(demo, "load_env", lambda: None)
+    assert demo.main([clip, "--no-window"]) == 2
+
+
+def test_cli_streams_a_file(monkeypatch, clip, capsys):
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test")
+    monkeypatch.setattr(demo, "load_env", lambda: None)
+    monkeypatch.setattr(demo, "IsaacClient", lambda **kwargs: SimpleNamespace(model="fake", detect=FakeClient().detect))
+    assert demo.main([clip, "--no-window"]) == 0
+    out = capsys.readouterr().out
+    assert "Streaming" in out and "sending 2 frames/sec" in out and "Video finished." in out
