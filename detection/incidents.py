@@ -67,6 +67,8 @@ CLEAR_AFTER_SECONDS = 10.0
 # Single camera for now.
 DEFAULT_CAMERA_ID = "camera_1"
 
+Box = tuple[int, int, int, int]  # x1, y1, x2, y2 on the model's 0-1000 grid
+
 
 @dataclass(frozen=True)
 class ClassifiedFrame:
@@ -75,6 +77,7 @@ class ClassifiedFrame:
     timestamp: datetime
     dangers: frozenset[Danger]
     frame: Any = None  # the image itself (JPEG bytes, ndarray, ...); passed through untouched
+    boxes: tuple[tuple[Danger, Box], ...] = ()  # where each danger was seen, if known
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,7 @@ class IncidentReport:
     first_frame: Any
     missing_frames: int = 0  # frames dropped between the first danger frame and now
     ended_at: datetime | None = None  # set on close
+    boxes: tuple[Box, ...] = ()  # where the danger was last seen; set on reject
 
     @property
     def hazard_type(self) -> str:
@@ -119,6 +123,7 @@ class _DangerTracker:
     state: Literal["idle", "open", "rejected"] = "idle"
     open_report: IncidentReport | None = None
     last_seen: datetime | None = None
+    last_boxes: tuple[Box, ...] = ()
     misses: int = 0
 
     def __post_init__(self) -> None:
@@ -143,6 +148,10 @@ class _DangerTracker:
         present = self.danger in result.dangers
         # Only danger frames keep their image; the rest would just hold memory.
         self._push(_Sample(present, timestamp=result.timestamp, frame=result.frame if present else None))
+
+        if present:
+            boxes = tuple(box for danger, box in result.boxes if danger == self.danger)
+            self.last_boxes = boxes or self.last_boxes
 
         if self.state == "idle":
             return self._maybe_open(result, camera_id)
@@ -206,6 +215,7 @@ class _DangerTracker:
         self.state = "idle"
         self.open_report = None
         self.misses = 0
+        self.last_boxes = ()
         # Forget the evidence behind the last incident, so a new one needs a
         # fresh 80% of the window rather than reopening off stale frames.
         for sample in self.window:
@@ -283,7 +293,7 @@ class IncidentDetector:
             report = tracker.open_report
             if report is not None and report.client_incident_id == client_incident_id:
                 tracker.reject()
-                return IncidentEvent("rejected", report)
+                return IncidentEvent("rejected", replace(report, boxes=tracker.last_boxes))
         return None
 
     def run(self, results: Iterable[ClassifiedFrame]) -> list[IncidentEvent]:

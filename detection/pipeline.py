@@ -9,6 +9,10 @@ Samples the analyzer skipped (all request slots busy) are never sent and get no
 sequence number; failed calls are dropped here. Either way the detector sees a
 gap in the timestamps and counts those frames as missing.
 
+When the manager marks an incident as a false positive, the spot it was seen in
+becomes an ignore zone (see ``detection.suppression``): detections of that
+hazard there are dropped here, before the detector sees them.
+
 Frame timestamps are the stream's start time plus video time, so incident
 durations come from video time and are unaffected by model latency. When a
 looping video restarts, video time keeps counting up instead of jumping back.
@@ -27,6 +31,7 @@ from detection.api_client import IncidentReporter
 from detection.incidents import ClassifiedFrame, Danger, IncidentEvent
 from detection.isaac_client import FrameResult
 from detection.overlay import draw_detections
+from detection.suppression import Suppressor
 from detection.video_source import format_position
 
 
@@ -37,8 +42,10 @@ class IncidentPipeline:
         fps: float,
         started_at: datetime | None = None,
         on_event: Callable[[IncidentEvent, "IncidentPipeline"], None] | None = None,
+        suppressor: Suppressor | None = None,
     ):
         self.reporter = reporter
+        self.suppressor = suppressor or Suppressor()
         self.interval = 1.0 / fps
         self.started_at = started_at or datetime.now(timezone.utc)
         self.on_event = on_event or print_event
@@ -77,16 +84,27 @@ class IncidentPipeline:
         if self._last_position is not None and position_s < self._last_position:
             self._offset += self._last_position + self.interval  # the video looped
         self._last_position = position_s
-        dangers = frozenset(Danger(d.hazard) for d in result.detections)
+        timestamp = self.started_at + timedelta(seconds=self._offset + position_s)
+        detections = [
+            d for d in result.detections if not self.suppressor.is_suppressed(Danger(d.hazard), d.box, timestamp)
+        ]
+        dangers = frozenset(Danger(d.hazard) for d in detections)
         return ClassifiedFrame(
-            timestamp=self.started_at + timedelta(seconds=self._offset + position_s),
+            timestamp=timestamp,
             dangers=dangers,
             # Only frames with a danger can become an incident's first frame; send it with the boxes drawn on.
-            frame=draw_detections(frame, result.detections) if dangers else None,
+            frame=draw_detections(frame, detections) if dangers else None,
+            boxes=tuple((Danger(d.hazard), d.box) for d in detections),
         )
 
     def _process(self, frame: ClassifiedFrame) -> None:
-        self._emit(self.reporter.process(frame))
+        events = self.reporter.process(frame)
+        for event in events:
+            if event.kind == "rejected":
+                report = event.report
+                with self._lock:  # the suppressor is also read in _classify, under this lock
+                    self.suppressor.add(report.danger, report.boxes, frame.timestamp, report.client_incident_id)
+        self._emit(events)
 
     def _emit(self, events: list[IncidentEvent]) -> None:
         for event in events:
@@ -108,7 +126,7 @@ def print_event(event: IncidentEvent, pipeline: IncidentPipeline) -> None:
     elif event.kind == "rejected":
         print(
             f"*** INCIDENT REJECTED by manager (false positive): {report.hazard_type}, first seen {start}; "
-            f"no longer recording (id {report.client_incident_id})",
+            f"no longer recording, ignoring {report.hazard_type} in that spot (id {report.client_incident_id})",
             flush=True,
         )
     else:

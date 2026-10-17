@@ -58,7 +58,11 @@ for 10 s. Timing comes from video time, so model latency doesn't affect duration
 - **Checked**: every 10 s, while anything is open, the worker sends `POST /incidents/false-positives` with
   `{"incident_ids": [...]}` (open incidents the API has acknowledged). The API answers `{"<id>": true, ...}` for the
   ones the manager marked as false positives; those stop being recorded and are never closed. Anything other than
-  `true` keeps the incident going. The same hazard can't reopen until it has cleared.
+  `true` keeps the incident going.
+- **Ignored spot**: a false positive's boxes become ignore zones (`suppression.py`). Later detections of the same
+  hazard that mostly overlap one are dropped before they reach the detector, so the same misread object can't open
+  a new incident. Other hazards there, and the same hazard elsewhere in the frame, still count. A zone ends after
+  30 minutes, or once nothing has matched it for 60 s. Every dropped detection is logged.
 - **Closed**: the worker sends the same ID with the duration.
 
 Frames the model never answered (call failed, or all request slots busy) are counted as missing from gaps in the
@@ -69,7 +73,8 @@ Without `--api-url` (or `API_URL`), incidents are printed but not sent. The work
 `API_WORKER_TOKEN`.
 
 TODO: the 20 s window is hardcoded for every hazard (`DANGER_SECONDS` in `incidents.py`), and `camera_1`'s zone is
-a placeholder (`CAMERA_LOCATIONS` in `api_client.py`).
+a placeholder (`CAMERA_LOCATIONS` in `api_client.py`). The ignore-zone lifetimes (`MAX_AGE_SECONDS`,
+`IDLE_SECONDS` in `suppression.py`) are placeholders too.
 
 ## Files
 
@@ -81,6 +86,7 @@ a placeholder (`CAMERA_LOCATIONS` in `api_client.py`).
 | `video_source.py` | plays a video file or URL in real time, dropping frames like a live camera |
 | `demo.py` | the CLI: streams a video, samples 2 fps, runs the model, shows boxes, prints a summary |
 | `incidents.py` | sliding-window incident detector: open, close, reject, missing frames |
+| `suppression.py` | ignore zones for spots the manager marked as false positives |
 | `pipeline.py` | puts out-of-order model answers back in video order and feeds them to the detector |
 | `api_client.py` | sends opened/closed incidents to the API, retrying failed calls in order |
 | `compression.py` | shrinks a frame to a small JPEG |

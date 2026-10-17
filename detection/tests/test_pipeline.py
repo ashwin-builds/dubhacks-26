@@ -106,3 +106,53 @@ def test_run_video_end_to_end(clip):  # noqa: F811
 def test_annotate_shows_open_incidents():
     out = demo.annotate(FRAME.copy(), result(), incidents=[Danger.BURNERS])
     assert out[5, 5].tolist() == [0, 0, 200]  # red banner even though this frame is clear
+
+
+def boxed(*items):
+    """A model result with (hazard, box) detections."""
+    return FrameResult([Detection(h, h, box) for h, box in items], [], 0.1, None)
+
+
+KNIFE = (100, 100, 200, 200)
+ELSEWHERE = (600, 600, 700, 700)
+
+
+def test_false_positive_spot_is_ignored_afterwards():
+    """A knife opens an incident; the manager says no; the same knife never opens another one."""
+    pipeline, api, events = make_pipeline()  # 2 s window, checks every 10 s
+    seq = 0
+
+    def feed(n, *items):
+        nonlocal seq
+        for _ in range(n):
+            pipeline.deliver(seq, seq * 0.5, FRAME, boxed(*items))
+            seq += 1
+        pipeline._worker.submit(lambda: None).result()  # wait for the worker to catch up
+
+    feed(4, ("knife_edge", KNIFE))  # opens at 1.5 s
+    incident_id = events[0].report.client_incident_id
+    api.false_positive_ids.add(incident_id)
+    feed(20, ("knife_edge", KNIFE))  # the 10 s check rejects it
+    assert [e.kind for e in events] == ["opened", "rejected"]
+    assert events[1].report.boxes == (KNIFE,)
+    assert pipeline.suppressor.zones and pipeline.suppressor.zones[0].box == KNIFE
+
+    # The knife stays for another 60 s, with the box jittering a little: nothing new opens.
+    feed(120, ("knife_edge", (105, 98, 210, 204)))
+    assert [e.kind for e in events] == ["opened", "rejected"]
+    assert pipeline.suppressor.suppressed > 100
+
+    # A different knife elsewhere in the frame is still a real incident.
+    feed(4, ("knife_edge", KNIFE), ("knife_edge", ELSEWHERE))
+    pipeline.close()
+    assert [e.kind for e in events] == ["opened", "rejected", "opened", "closed"]
+    assert events[2].report.client_incident_id != incident_id
+
+
+def test_suppression_does_not_hide_other_hazards_in_the_same_spot():
+    pipeline, api, events = make_pipeline()
+    pipeline.suppressor.add(Danger.SHARPS, (KNIFE,), T0, "earlier")
+    for seq in range(4):
+        pipeline.deliver(seq, seq * 0.5, FRAME, boxed(("knife_edge", KNIFE), ("spill", KNIFE)))
+    pipeline.close()
+    assert [(e.kind, e.report.danger) for e in events] == [("opened", Danger.SPILLS), ("closed", Danger.SPILLS)]
