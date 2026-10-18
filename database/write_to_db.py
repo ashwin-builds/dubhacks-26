@@ -26,7 +26,7 @@ def save_incident(hazard_type, time, duration, image, location, description=None
         VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING incident_id
         """,
-        (time, hazard_type, duration, image, description, get_zone_id(location)),
+        (time, duration, image, description, get_zone_id(location)),
     ).fetchone()[0]
 
     return incident_id
@@ -38,7 +38,7 @@ def save_expo_reply(incident_id, said_yes, notes=None):
         """
         UPDATE incidents
         SET false_positive = %s,
-            staff_notes     = coalesce(%s, staff_notes)
+            expo_notes     = coalesce(%s, staff_notes)
         WHERE incident_id = %s
         """,
         (not said_yes, notes, incident_id),
