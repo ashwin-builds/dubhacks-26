@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+psycopg[binary]
+python-dotenv
+altair
+pandas
+anthropic
+tzdata
