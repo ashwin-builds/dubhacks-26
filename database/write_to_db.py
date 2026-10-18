@@ -22,7 +22,7 @@ def save_incident(hazard_type, time, duration, image, location, description=None
     """Save one hazard the camera reported. Returns its id so we can update it later."""
     incident_id = conn.execute(
         """
-        INSERT INTO incidents (time, hazard_type, duration, image_as_binary, perceptron_desc, zone_id)
+        INSERT INTO incidents (time, duration, image_as_binary, perceptron_desc, zone_id)
         VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING incident_id
         """,
@@ -37,7 +37,7 @@ def save_expo_reply(incident_id, said_yes, notes=None):
     conn.execute(
         """
         UPDATE incidents
-        SET false_postitive = %s,
+        SET false_positive = %s,
             staff_notes     = coalesce(%s, staff_notes)
         WHERE incident_id = %s
         """,

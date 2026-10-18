@@ -1,5 +1,4 @@
 CREATE EXTENSION IF NOT EXISTS timescaledb;
-DROP TABLE IF EXISTS incidents CASCADE;
 
 -- ============ STATIC: kitchen layout (set once) ============
 CREATE TABLE IF NOT EXISTS zones (
@@ -27,7 +26,7 @@ CREATE TABLE IF NOT EXISTS incidents (
     duration        INTEGER,
     image_as_binary BYTEA,
     perceptron_desc TEXT,
-    false_postitive BOOLEAN DEFAULT NULL,
+    false_positive BOOLEAN DEFAULT NULL,
     zone_id         INT DEFAULT NULL,
     expo_notes     TEXT DEFAULT NULL,       -- typed by expo, never camera
     PRIMARY KEY (incident_id, time)     -- hypertables need the time column in the key
