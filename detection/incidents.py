@@ -82,7 +82,7 @@ class ClassifiedFrame:
 
 @dataclass(frozen=True)
 class IncidentReport:
-    client_incident_id: str  # generated here; the API stores it for lookup
+    client_incident_id: str  # generated here; maps to the database row while the incident is open
     danger: Danger
     camera_id: str
     started_at: datetime  # timestamp of the first danger frame

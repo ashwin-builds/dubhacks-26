@@ -27,7 +27,7 @@ from typing import Callable
 
 import numpy as np
 
-from detection.api_client import IncidentReporter
+from detection.reporter import IncidentReporter
 from detection.incidents import ClassifiedFrame, Danger, IncidentEvent
 from detection.isaac_client import FrameResult
 from detection.overlay import draw_detections
@@ -54,7 +54,7 @@ class IncidentPipeline:
         self._waiting: dict[int, tuple[float, np.ndarray, FrameResult] | None] = {}
         self._offset = 0.0  # video time added by earlier loops of the video
         self._last_position: float | None = None
-        # API calls can block for seconds; keep them off the model threads.
+        # Database writes can block for seconds; keep them off the model threads.
         self._worker = ThreadPoolExecutor(max_workers=1)
 
     def deliver(self, seq: int, position_s: float, frame: np.ndarray, result: FrameResult | None) -> None:

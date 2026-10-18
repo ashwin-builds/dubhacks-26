@@ -1,4 +1,4 @@
-"""Shrink a frame to a small JPEG before it goes to the API."""
+"""Shrink a frame to a small JPEG before it is written to the database."""
 
 from __future__ import annotations
 

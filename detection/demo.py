@@ -2,7 +2,7 @@
 
 Nothing is analysed ahead of time. The video plays in real time; every 0.5 s of playback the frame on
 screen is sent to the model, exactly as a live 2 fps camera feed would be. Results feed the incident
-detector; incidents are printed, and sent to the API only if --api-url (or API_URL) is set.
+detector; incidents are printed, and written to the incidents database only with --write-db.
 
     python -m detection.demo clip.mp4            # a video file
     python -m detection.demo                     # choose the file in a dialog
@@ -10,7 +10,7 @@ detector; incidents are printed, and sent to the API only if --api-url (or API_U
     python -m detection.demo clip.mp4 --loop     # keep streaming until you press q
     python -m detection.demo clip.mp4 --hazards spill knife_edge --model perceptron-mk1.5
     python -m detection.demo --list-models       # which models your API key can use
-    python -m detection.demo clip.mp4 --api-url http://localhost:8000   # also send incidents to the API
+    python -m detection.demo clip.mp4 --write-db  # also write incidents to TIGER_DATABASE_URL
 
 Keys in the window: q / Esc to quit, s to save an annotated snapshot.
 """
@@ -29,12 +29,13 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from detection.api_client import HttpIncidentApi, IncidentReporter, StubIncidentApi
 from detection.hazards import HAZARDS
 from detection.incidents import Danger, IncidentDetector
 from detection.isaac_client import FrameResult, IsaacClient, list_models
 from detection.overlay import draw_detections, draw_status
 from detection.pipeline import IncidentPipeline
+from detection.reporter import IncidentReporter
+from detection.store import PostgresIncidentStore, StubIncidentStore
 from detection.video_source import VideoFileStream, format_position, pick_video_file, resolve_video
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
@@ -243,9 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-window", action="store_true", help="print results only; no video window")
     parser.add_argument(
-        "--api-url",
-        default=os.environ.get("API_URL"),
-        help="send incidents to this API (default API_URL; if unset, incidents are only printed)",
+        "--write-db",
+        action="store_true",
+        help="write incidents to the database at TIGER_DATABASE_URL (default: only print them)",
     )
     parser.add_argument("--show-prompt", action="store_true", help="print the prompt sent to the model")
     args = parser.parse_args(argv)
@@ -279,13 +280,16 @@ def main(argv: list[str] | None = None) -> int:
         f"Streaming {video} ({length}{stream.fps:g} fps) in real time, "
         f"sending {args.fps:g} frames/sec to the model. Press q to stop, s to save a snapshot."
     )
-    if args.api_url:
-        api = HttpIncidentApi(args.api_url, os.environ.get("API_WORKER_TOKEN", ""))
-        print(f"Sending incidents to {args.api_url}")
+    if args.write_db:
+        if not os.environ.get("TIGER_DATABASE_URL"):
+            print("--write-db needs TIGER_DATABASE_URL in your environment or .env.", file=sys.stderr)
+            return 2
+        store = PostgresIncidentStore()
+        print("Writing incidents to the incidents database.")
     else:
-        api = StubIncidentApi()
-        print("No --api-url: incidents are printed, not sent.")
-    pipeline = IncidentPipeline(IncidentReporter(IncidentDetector(fps=args.fps), api), fps=args.fps)
+        store = StubIncidentStore()
+        print("Incidents are printed, not written to the database (pass --write-db to write them).")
+    pipeline = IncidentPipeline(IncidentReporter(IncidentDetector(fps=args.fps), store), fps=args.fps)
     return run_video(client, stream, args.fps, show=not args.no_window, pipeline=pipeline)
 
 

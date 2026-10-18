@@ -1,6 +1,6 @@
 """Ignore spots a manager has marked as false positives.
 
-When the API says an incident was a false positive, the boxes it was last seen
+When the manager marks an incident as a false positive, the boxes it was last seen
 in become ignore zones for that hazard. Later detections of the same hazard
 that mostly overlap a zone are dropped before they reach the incident detector,
 so the same misread object doesn't open a new incident and text the manager

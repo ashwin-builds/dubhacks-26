@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 import numpy as np
 
 from detection import demo
-from detection.api_client import IncidentReporter, StubIncidentApi
+from detection.reporter import IncidentReporter
+from detection.store import StubIncidentStore
 from detection.incidents import Danger, IncidentDetector
 from detection.isaac_client import Detection, FrameResult
 from detection.pipeline import IncidentPipeline
@@ -19,20 +20,20 @@ def result(*hazards):
 
 def make_pipeline(seconds=2.0, fps=2.0):
     """Small windows so tests stay short: 2 s at 2 fps = 4 frames, 80% = 3."""
-    api = StubIncidentApi()
+    store = StubIncidentStore()
     detector = IncidentDetector(fps=fps, danger_seconds={d: seconds for d in Danger}, clear_after_seconds=1.0)
     events = []
     pipeline = IncidentPipeline(
-        IncidentReporter(detector, api, location="prep_line", compress=lambda f: b"jpeg"),
+        IncidentReporter(detector, store, location="prep_line", compress=lambda f: b"jpeg"),
         fps=fps,
         started_at=T0,
         on_event=lambda e, p: events.append(e),
     )
-    return pipeline, api, events
+    return pipeline, store, events
 
 
 def test_out_of_order_answers_are_fed_in_video_order():
-    pipeline, api, events = make_pipeline()
+    pipeline, store, events = make_pipeline()
     # Answers land 3, 1, 0, 2: nothing can be processed until 0 arrives.
     for seq in (3, 1, 0, 2):
         pipeline.deliver(seq, seq * 0.5, FRAME, result("spill"))
@@ -43,7 +44,8 @@ def test_out_of_order_answers_are_fed_in_video_order():
     assert opened.danger is Danger.SPILLS
     assert events[1].report.duration_seconds == 2.0
     assert events[1].report.missing_frames == 0
-    assert api.calls[0][2]["location"] == "prep_line"
+    assert store.rows[1]["location"] == "prep_line"
+    assert store.rows[1]["hazard_type"] == "spill" and store.rows[1]["completed"] is True
 
 
 def test_failed_calls_become_missing_frames():
@@ -76,22 +78,22 @@ def test_looping_video_keeps_time_moving_forward():
 
 
 def test_first_frame_has_boxes_drawn():
-    pipeline, api, _ = make_pipeline()
+    pipeline, store, _ = make_pipeline()
     pipeline.reporter.compress = lambda f: f  # keep the raw frame to inspect
     for seq in range(4):
         pipeline.deliver(seq, seq * 0.5, FRAME, result("spill"))
     pipeline.close()
-    first = api.calls[0][2]["image"]
+    first = store.rows[1]["image_as_binary"]
     assert first.shape == FRAME.shape and first.any()  # the box was drawn on a black frame
 
 
 def test_run_video_end_to_end(clip):  # noqa: F811
     """2 s clip at 10 fps; FakeClient sees a spill from 1 s. With a 1 s window, that is an incident."""
-    api = StubIncidentApi()
+    store = StubIncidentStore()
     events = []
     detector = IncidentDetector(fps=2, danger_seconds={d: 1.0 for d in Danger})
     pipeline = IncidentPipeline(
-        IncidentReporter(detector, api, location="prep_line", compress=lambda f: b"jpeg"),
+        IncidentReporter(detector, store, location="prep_line", compress=lambda f: b"jpeg"),
         fps=2,
         started_at=T0,
         on_event=lambda e, p: events.append(e),
@@ -100,7 +102,8 @@ def test_run_video_end_to_end(clip):  # noqa: F811
     assert [(e.kind, e.report.danger) for e in events] == [("opened", Danger.SPILLS), ("closed", Danger.SPILLS)]
     assert pipeline.video_time(events[0].report.started_at) == 1.0
     assert events[1].report.duration_seconds == 1.0
-    assert [c[0] for c in api.calls] == ["open", "close"]
+    assert [c[0] for c in store.calls] == ["create", "complete"]
+    assert store.rows[1]["duration"] == 1 and store.rows[1]["false_positive"] is None
 
 
 def test_annotate_shows_open_incidents():
@@ -119,7 +122,7 @@ ELSEWHERE = (600, 600, 700, 700)
 
 def test_false_positive_spot_is_ignored_afterwards():
     """A knife opens an incident; the manager says no; the same knife never opens another one."""
-    pipeline, api, events = make_pipeline()  # 2 s window, checks every 10 s
+    pipeline, store, events = make_pipeline()  # 2 s window, checks every 10 s
     seq = 0
 
     def feed(n, *items):
@@ -131,7 +134,7 @@ def test_false_positive_spot_is_ignored_afterwards():
 
     feed(4, ("knife_edge", KNIFE))  # opens at 1.5 s
     incident_id = events[0].report.client_incident_id
-    api.false_positive_ids.add(incident_id)
+    store.rows[pipeline.reporter.db_id(incident_id)]["false_positive"] = True  # the manager says no
     feed(20, ("knife_edge", KNIFE))  # the 10 s check rejects it
     assert [e.kind for e in events] == ["opened", "rejected"]
     assert events[1].report.boxes == (KNIFE,)
@@ -150,7 +153,7 @@ def test_false_positive_spot_is_ignored_afterwards():
 
 
 def test_suppression_does_not_hide_other_hazards_in_the_same_spot():
-    pipeline, api, events = make_pipeline()
+    pipeline, store, events = make_pipeline()
     pipeline.suppressor.add(Danger.SHARPS, (KNIFE,), T0, "earlier")
     for seq in range(4):
         pipeline.deliver(seq, seq * 0.5, FRAME, boxed(("knife_edge", KNIFE), ("spill", KNIFE)))
